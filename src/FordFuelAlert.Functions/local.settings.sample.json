@@ -1,0 +1,21 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "FuelAlert__ThresholdPercent": "25",
+    "FuelAlert__ResetPercent": "40",
+    "FuelAlert__RecipientEmail": "you@example.com",
+    "FuelAlert__VehicleId": "demo-vehicle",
+    "FuelAlert__UseFakeFuelService": "true",
+    "FakeFuel__PercentRemaining": "20",
+    "FakeFuel__RangeMiles": "40",
+    "AlertState__FilePath": "",
+    "Smartcar__ClientId": "",
+    "Smartcar__ClientSecret": "",
+    "Smartcar__RefreshToken": "",
+    "Email__Provider": "console",
+    "Email__ApiKey": "",
+    "Email__FromAddress": "alerts@example.com"
+  }
+}

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FordFuelAlert.Functions/FordFuelAlert.Functions.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FordFuelAlert.Tests/FordFuelAlert.Tests.csproj" />
+  </Folder>
+</Solution>

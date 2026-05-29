@@ -1,0 +1,29 @@
+## Build output
+bin/
+obj/
+out/
+
+## IDEs / editors
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+## Azure Functions local settings & secrets — NEVER commit
+local.settings.json
+
+## Azurite storage emulator artifacts
+__azurite_db*.json
+__blobstorage__/
+__queuestorage__/
+azurite/
+
+## Local file-based alert state
+alert-state.json
+
+## OS / misc
+.DS_Store
+Thumbs.db
+*.log
