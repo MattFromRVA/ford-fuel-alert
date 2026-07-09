@@ -35,7 +35,7 @@ CheckFuelLevelFunction            Functions/CheckFuelLevelFunction.cs  (thin tri
       ▼
 FuelAlertService                  Services/FuelAlertService.cs  (all decision logic, unit-tested)
    │            │            │
-   │            │            └─ IAlertStateService ─► FileAlertStateService (JSON on disk)   [TODO: TableAlertStateService]
+   │            │            └─ IAlertStateService ─► FileAlertStateService (JSON on disk, dev) / TableAlertStateService (Azure Table Storage)
    │            └─────────────── IEmailService      ─► ConsoleEmailService  (logs the email)  [TODO: SendGrid / ACS]
    └──────────────────────────── IFuelService       ─► FakeFuelService      (config values)   [TODO: SmartcarFuelService]
 ```
@@ -50,7 +50,8 @@ src/FordFuelAlert.Functions/
   Abstractions/               IFuelService, IEmailService, IAlertStateService
   Models/                     FuelStatus, AlertState, EmailMessage, FuelAlertResult, *Options
   Services/                   FuelAlertService, FakeFuelService, ConsoleEmailService,
-                              FileAlertStateService, SmartcarFuelService*, TableAlertStateService*
+                              FileAlertStateService, TableAlertStateService,
+                              AlertStateServiceFactory, SmartcarFuelService*
                               (* = placeholder, not wired up yet)
 tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel service
 ```
@@ -137,7 +138,11 @@ Names use the double-underscore convention that binds to options sections.
 | `FuelAlert__UseFakeFuelService`  | `true`           | `true` = fake provider; `false` routes to Smartcar (TODO).     |
 | `FakeFuel__PercentRemaining`     | *(none)*         | Fake fuel %. Empty = simulate "unavailable".                   |
 | `FakeFuel__RangeMiles`           | *(none)*         | Fake estimated range in miles (optional).                      |
-| `AlertState__FilePath`           | local app-data   | Where the file-based state is stored (dev only).               |
+| `AlertState__Provider`           | `file`           | `file` = local JSON (dev only); `table` = Azure Table Storage. |
+| `AlertState__FilePath`           | local app-data   | `file` provider: where the JSON state is stored.               |
+| `AlertState__ConnectionString`   | *(none)*         | `table` provider: storage connection string. **Secret.**       |
+| `AlertState__ServiceUri`         | *(none)*         | `table` provider: table endpoint for managed identity (preferred over the connection string in Azure). |
+| `AlertState__TableName`          | `FuelAlertState` | `table` provider: table name.                                  |
 | `Smartcar__ClientId`             | *(none)*         | Future Smartcar OAuth client id.                               |
 | `Smartcar__ClientSecret`         | *(none)*         | Future Smartcar OAuth client secret. **Secret.**               |
 | `Smartcar__RefreshToken`         | *(none)*         | Future Smartcar refresh token. **Secret.**                     |
@@ -187,8 +192,10 @@ The real vehicle-data integration is intentionally **not** built yet. When addin
 2. Configure **Application Settings** with the same keys as above; put secrets in **Key Vault** and
    reference them from App Settings.
 3. Replace the dev-only pieces with durable equivalents:
-   - `FileAlertStateService` → a durable store (see `TableAlertStateService` TODO). The Functions file
-     system is ephemeral, so file-based state is **local development only**.
+   - Set `AlertState__Provider=table` so state lives in Azure Table Storage (`TableAlertStateService`).
+     The Functions file system is ephemeral, so the default file-based state is **local development only**.
+     Prefer `AlertState__ServiceUri` + managed identity (grant the app **Storage Table Data Contributor**)
+     over a connection string.
    - `ConsoleEmailService` → a real provider (SendGrid or Azure Communication Services) behind `IEmailService`.
    - `FakeFuelService` → `SmartcarFuelService` once implemented.
 4. Ensure `AzureWebJobsStorage` points at a real storage account.
