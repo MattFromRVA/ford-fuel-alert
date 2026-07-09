@@ -18,11 +18,26 @@ public class AcsEmailServiceTests
         await service.SendAsync(new EmailMessage("owner@example.com", "Ford fuel is low", "Fuel: 20%"));
 
         Assert.NotNull(client.Captured);
-        Assert.Equal(WaitUntil.Started, client.Wait);
+        // Completed (not Started) so a failed send throws instead of being treated as delivered.
+        Assert.Equal(WaitUntil.Completed, client.Wait);
         Assert.Equal("alerts@fabrikam.azurecomm.net", client.Captured!.SenderAddress);
         Assert.Equal("owner@example.com", Assert.Single(client.Captured.Recipients.To).Address);
         Assert.Equal("Ford fuel is low", client.Captured.Content.Subject);
         Assert.Equal("Fuel: 20%", client.Captured.Content.PlainText);
+    }
+
+    [Fact]
+    public async Task Throws_without_sending_when_recipient_is_not_a_valid_address()
+    {
+        var client = new CapturingEmailClient();
+        var service = new AcsEmailService(client, "alerts@fabrikam.azurecomm.net", NullLogger<AcsEmailService>.Instance);
+
+        // The placeholder FuelAlertService uses when FuelAlert__RecipientEmail is unset.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.SendAsync(new EmailMessage("(recipient not configured)", "Ford fuel is low", "Fuel: 20%")));
+
+        Assert.Contains("FuelAlert__RecipientEmail", ex.Message);
+        Assert.Null(client.Captured);
     }
 
     // Azure SDK clients expose a protected constructor and virtual methods for exactly this kind of test double.
@@ -36,7 +51,7 @@ public class AcsEmailServiceTests
         {
             Captured = message;
             Wait = wait;
-            // The service ignores the return value (it uses WaitUntil.Started), so a null operation is fine here.
+            // The service ignores the return value, so a null operation is fine here.
             return Task.FromResult<EmailSendOperation>(null!);
         }
     }

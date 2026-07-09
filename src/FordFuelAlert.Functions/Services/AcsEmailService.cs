@@ -25,13 +25,25 @@ public sealed class AcsEmailService : IEmailService
 
     public async Task SendAsync(EmailMessage message, CancellationToken cancellationToken = default)
     {
+        // A real provider can't send to nobody. The console provider tolerates a missing recipient
+        // (logs a placeholder), but here that would reach ACS as an invalid address on every low-fuel
+        // run, so fail with a clear, actionable error instead of a cryptic ACS validation failure.
+        if (string.IsNullOrWhiteSpace(message.To) || !message.To.Contains('@'))
+        {
+            throw new InvalidOperationException(
+                $"Cannot send an alert email via Azure Communication Services without a valid recipient address "
+                + $"(got '{message.To}'). Set FuelAlert__RecipientEmail.");
+        }
+
         var content = new EmailContent(message.Subject) { PlainText = message.Body };
         var recipients = new EmailRecipients(new[] { new EmailAddress(message.To) });
         var acsMessage = new Azure.Communication.Email.EmailMessage(_fromAddress, recipients, content);
 
-        // WaitUntil.Started: queue the message and return; a failure to queue throws RequestFailedException.
-        await _client.SendAsync(WaitUntil.Started, acsMessage, cancellationToken);
+        // WaitUntil.Completed: poll the send operation to a terminal state so a failed send throws
+        // (RequestFailedException) rather than returning "success". FuelAlertService only marks
+        // AlertSent=true after this returns, so throwing on failure keeps the alert armed for a retry.
+        await _client.SendAsync(WaitUntil.Completed, acsMessage, cancellationToken);
 
-        _logger.LogInformation("Alert email queued via Azure Communication Services to {Recipient}.", message.To);
+        _logger.LogInformation("Alert email sent via Azure Communication Services to {Recipient}.", message.To);
     }
 }
