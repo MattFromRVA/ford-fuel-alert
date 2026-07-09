@@ -22,8 +22,24 @@ public sealed class TableAlertStateService : IAlertStateService
     public TableAlertStateService(TableClient tableClient, string? vehicleId, ILogger<TableAlertStateService> logger)
     {
         _tableClient = tableClient;
-        _rowKey = string.IsNullOrWhiteSpace(vehicleId) ? DefaultRowKey : vehicleId;
+        _rowKey = string.IsNullOrWhiteSpace(vehicleId) ? DefaultRowKey : SanitizeKey(vehicleId);
         _logger = logger;
+    }
+
+    // Azure Table Storage rejects '/', '\', '#', '?', and control characters in PartitionKey/RowKey
+    // values; FuelAlert__VehicleId is free-form config, so map those to '-' instead of failing every run.
+    private static string SanitizeKey(string value)
+    {
+        var characters = value.ToCharArray();
+        for (var i = 0; i < characters.Length; i++)
+        {
+            if (characters[i] is '/' or '\\' or '#' or '?' || char.IsControl(characters[i]))
+            {
+                characters[i] = '-';
+            }
+        }
+
+        return new string(characters);
     }
 
     public async Task<AlertState?> GetAsync(CancellationToken cancellationToken = default)

@@ -99,6 +99,32 @@ public class TableAlertStateServiceTests
     }
 
     [Fact]
+    public async Task SaveAsync_SanitizesDisallowedRowKeyCharacters_InVehicleId()
+    {
+        // Azure Table Storage rejects '/', '\', '#', '?', and control characters in RowKey values.
+        var tableClient = new FakeTableClient();
+        var service = CreateService(tableClient, vehicleId: "fords/f-150\\one#two?three\u0001");
+
+        await service.SaveAsync(new AlertState { AlertSent = true });
+
+        var key = Assert.Single(tableClient.Entities.Keys);
+        Assert.Equal("fords-f-150-one-two-three-", key.RowKey);
+    }
+
+    [Fact]
+    public async Task SaveAsync_ThenGetAsync_RoundTripsWithSanitizedVehicleId()
+    {
+        var tableClient = new FakeTableClient();
+        var service = CreateService(tableClient, vehicleId: "fords/f-150");
+
+        await service.SaveAsync(new AlertState { AlertSent = true });
+        var loaded = await service.GetAsync();
+
+        Assert.NotNull(loaded);
+        Assert.True(loaded.AlertSent);
+    }
+
+    [Fact]
     public async Task SaveAsync_FallsBackToDefaultRowKey_WhenVehicleIdMissing()
     {
         var tableClient = new FakeTableClient();
