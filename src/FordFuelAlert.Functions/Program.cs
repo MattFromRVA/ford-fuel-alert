@@ -20,7 +20,7 @@ var host = new HostBuilder()
 
         services.AddSingleton(TimeProvider.System);
 
-        // Fuel data provider. Default = fake. Set FuelAlert__UseFakeFuelService=false to route to Smartcar (not yet implemented).
+        // Fuel data provider. Default = fake. Set FuelAlert__UseFakeFuelService=false to route to the real Smartcar provider.
         var useFakeFuelService = configuration.GetValue($"{FuelAlertOptions.SectionName}:UseFakeFuelService", true);
         if (useFakeFuelService)
         {
@@ -28,6 +28,13 @@ var host = new HostBuilder()
         }
         else
         {
+            services.AddHttpClient();
+            services.AddSingleton<ISmartcarTokenStore>(provider =>
+            {
+                var smartcarOptions = configuration.GetSection(SmartcarOptions.SectionName).Get<SmartcarOptions>() ?? new SmartcarOptions();
+                var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+                return SmartcarTokenStoreFactory.Create(smartcarOptions, loggerFactory);
+            });
             services.AddSingleton<IFuelService, SmartcarFuelService>();
         }
 
