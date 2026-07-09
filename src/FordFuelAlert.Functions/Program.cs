@@ -16,6 +16,7 @@ var host = new HostBuilder()
         services.Configure<FakeFuelOptions>(configuration.GetSection(FakeFuelOptions.SectionName));
         services.Configure<SmartcarOptions>(configuration.GetSection(SmartcarOptions.SectionName));
         services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.SectionName));
+        services.Configure<AlertStateOptions>(configuration.GetSection(AlertStateOptions.SectionName));
 
         services.AddSingleton(TimeProvider.System);
 
@@ -34,21 +35,13 @@ var host = new HostBuilder()
         // TODO: Add SendGrid / Azure Communication Services and select via Email__Provider.
         services.AddSingleton<IEmailService, ConsoleEmailService>();
 
-        // Alert state store. Default = local JSON file for development.
-        // TODO: Swap to TableAlertStateService (or another durable store) when running in Azure.
+        // Alert state store. AlertState__Provider selects "file" (local JSON, default) or "table" (Azure Table Storage, durable).
         services.AddSingleton<IAlertStateService>(provider =>
         {
-            var stateFilePath = configuration["AlertState:FilePath"];
-            if (string.IsNullOrWhiteSpace(stateFilePath))
-            {
-                stateFilePath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "ford-fuel-alert",
-                    "alert-state.json");
-            }
-
-            var logger = provider.GetRequiredService<ILogger<FileAlertStateService>>();
-            return new FileAlertStateService(stateFilePath, logger);
+            var alertStateOptions = configuration.GetSection(AlertStateOptions.SectionName).Get<AlertStateOptions>() ?? new AlertStateOptions();
+            var vehicleId = configuration[$"{FuelAlertOptions.SectionName}:VehicleId"];
+            var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+            return AlertStateServiceFactory.Create(alertStateOptions, vehicleId, loggerFactory);
         });
 
         services.AddSingleton<FuelAlertService>();
