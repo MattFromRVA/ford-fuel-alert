@@ -14,6 +14,9 @@ out/
 ## Azure Functions local settings & secrets — NEVER commit
 local.settings.json
 
+## azd environments (.azure/<env>/.env holds subscription metadata and secret values) — NEVER commit
+.azure/
+
 ## Azurite storage emulator artifacts
 __azurite_db*.json
 __blobstorage__/
