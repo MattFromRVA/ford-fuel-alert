@@ -186,7 +186,94 @@ The real vehicle-data integration is intentionally **not** built yet. When addin
 
 ---
 
+## Infrastructure (Bicep / azd)
+
+The Azure environment is defined as code under [`infra/`](infra/) so provisioning is
+repeatable. It is `azd`-compatible and can also be deployed with plain `az`.
+
+### Layout
+
+```
+azure.yaml                     # azd manifest → maps the fuel-alert service to the Function App
+infra/
+  main.bicep                   # subscription scope: creates the resource group + orchestrates modules
+  main.parameters.json         # azd parameter file (environment-variable substitution)
+  abbreviations.json           # resource-name abbreviations
+  modules/
+    monitoring.bicep           # Log Analytics workspace + Application Insights
+    storage.bicep              # Storage account + deployment container + alert-state table
+    communication.bicep        # Azure Communication Services + Email + Azure-managed domain
+    keyvault.bicep             # Key Vault (RBAC) + secrets (ACS connection string, optional Smartcar)
+    functionapp.bicep          # Flex Consumption plan + Function App + system-assigned identity
+    roleAssignments.bicep      # managed-identity role grants (storage + Key Vault)
+```
+
+### What it provisions
+
+- A **Flex Consumption** Function App (.NET isolated) with a **system-assigned managed identity**.
+- A **Storage account** (shared-key access disabled) for host storage, the deployment package,
+  and the durable alert-state table.
+- **Azure Communication Services + Email** with an Azure-managed domain (`DoNotReply@…`).
+- **Key Vault** (RBAC) holding the ACS connection string and, when supplied, the Smartcar secrets.
+- **Application Insights** (backed by a Log Analytics workspace) for the timer function's logs.
+
+### Security model
+
+- **Identity, not secrets, for connections:** host storage uses `AzureWebJobsStorage__accountName`
+  and alert state uses `AlertState__ServiceUri` — both resolved by the managed identity. Role grants:
+  Storage Blob Data Owner, Storage Table Data Contributor, Key Vault Secrets User.
+- **Secrets live only in Key Vault**, referenced from app settings via `@Microsoft.KeyVault(SecretUri=…)`.
+  Secret values come from secure parameters (Smartcar) or the ACS resource's runtime keys — never
+  from source control. `main.parameters.json` uses `${ENV_VAR}` substitution only.
+
+### App settings wired by the template
+
+`APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlert__*`
+(with `UseFakeFuelService=true` — the E2E work flips it), `AlertState__Provider=table` +
+`AlertState__ServiceUri` + `AlertState__TableName`, `Email__Provider=acs` + `Email__FromAddress`,
+and Key Vault references for `Email__ConnectionString` (and `Smartcar__ClientSecret` /
+`Smartcar__RefreshToken` when those secrets are supplied).
+
+> On **Flex Consumption**, the worker runtime is set through `functionAppConfig.runtime`
+> (`dotnet-isolated`), which replaces the classic `FUNCTIONS_WORKER_RUNTIME` app setting.
+> `Email__ConnectionString` is wired ahead of the ACS-email service implementation (a separate
+> issue); the current `ConsoleEmailService` does not read it.
+
+### Deploy
+
+With `azd` (recommended):
+
+```bash
+azd env new ffa-dev
+azd env set FUEL_ALERT_RECIPIENT_EMAIL you@example.com
+azd env set FUEL_ALERT_VEHICLE_ID demo-vehicle
+azd provision --preview   # what-if
+azd up                    # provision + deploy code
+```
+
+Or with plain `az` (subscription-scoped):
+
+```bash
+az deployment sub create \
+  --location eastus2 \
+  --template-file infra/main.bicep \
+  --parameters environmentName=ffa-dev location=eastus2 \
+               recipientEmail=you@example.com vehicleId=demo-vehicle \
+  --what-if     # drop --what-if to actually deploy
+```
+
+### Notes
+
+- **`dotnetVersion` defaults to `10.0`** to match this project's `net10.0` target. If a region has
+  not yet enabled .NET 10 on Flex Consumption, pass a supported value
+  (e.g. `--parameters dotnetVersion=9.0`) until it does.
+- Compile the templates locally with `az bicep build --file infra/main.bicep`.
+
+---
+
 ## Deploying to Azure
+
+> Prefer the Bicep templates in [`infra/`](infra/) — see [Infrastructure (Bicep / azd)](#infrastructure-bicep--azd). The steps below are the manual equivalent.
 
 1. Create a **Function App** on the .NET **isolated** stack (matching this project's target framework).
 2. Configure **Application Settings** with the same keys as above; put secrets in **Key Vault** and
