@@ -26,7 +26,8 @@ public class SmartcarFuelServiceTests
     private static SmartcarFuelService Build(
         ScriptedHttpMessageHandler handler,
         ISmartcarTokenStore tokenStore,
-        SmartcarOptions? options = null)
+        SmartcarOptions? options = null,
+        TimeProvider? timeProvider = null)
     {
         options ??= new SmartcarOptions
         {
@@ -39,7 +40,7 @@ public class SmartcarFuelServiceTests
             new SingleHandlerHttpClientFactory(handler),
             tokenStore,
             Options.Create(options),
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             NullLogger<SmartcarFuelService>.Instance);
     }
 
@@ -229,16 +230,83 @@ public class SmartcarFuelServiceTests
     }
 
     [Fact]
-    public async Task Returns_null_when_token_store_save_throws()
+    public async Task Still_returns_fuel_when_token_store_save_throws()
     {
-        // The token exchange succeeded but persisting the rotated token failed — must still degrade
-        // to null rather than let the Table Storage exception crash the run.
+        // Previously asserted null. Changed after PR #15 review (P1): the token exchange already
+        // succeeded and we hold a valid access token, so a failed *persist* must not throw away this
+        // run's reading. The rotated token is retained in memory (see the retention test below) and
+        // persistence is retried next exchange, rather than stranding the integration.
         var handler = HappyHandler();
         var store = new ThrowingSmartcarTokenStore(throwOnSave: true);
 
         var status = await Build(handler, store).GetFuelStatusAsync();
 
+        Assert.NotNull(status);
+        Assert.Equal(40d, status!.PercentRemaining);
+    }
+
+    [Fact]
+    public async Task Retains_rotated_token_in_memory_when_save_fails()
+    {
+        // Save keeps failing, but the rotated token must survive in memory so the next exchange uses
+        // it — not the stale token the store still returns (which Smartcar has already invalidated).
+        var handler = new ScriptedHttpMessageHandler(request =>
+            request.RequestUri!.ToString() == AuthUrl
+                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
+                : Json(HttpStatusCode.OK, FuelJson(0.4, 20, 150)));
+        var store = new ThrowingSmartcarTokenStore(throwOnSave: true); // Get returns stale "refresh-1"
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-09T00:00:00Z"));
+        var service = Build(handler, store, timeProvider: clock);
+
+        await service.GetFuelStatusAsync();
+        clock.Advance(TimeSpan.FromHours(3)); // past the ~2h access-token cache
+        await service.GetFuelStatusAsync();
+
+        var authBodies = handler.RequestBodies
+            .Where((_, i) => handler.Requests[i].RequestUri!.ToString() == AuthUrl)
+            .ToList();
+        Assert.Equal(2, authBodies.Count);
+        Assert.Contains("refresh_token=refresh-2", authBodies[1]); // second exchange uses the retained token
+    }
+
+    [Fact]
+    public async Task Returns_null_on_auth_timeout()
+    {
+        // HttpClient surfaces a timeout as TaskCanceledException even when the caller didn't cancel;
+        // that must degrade to null, not crash the timer run.
+        var handler = new ScriptedHttpMessageHandler(_ => throw new TaskCanceledException("timeout"));
+        var store = new InMemorySmartcarTokenStore("refresh-1");
+
+        var status = await Build(handler, store).GetFuelStatusAsync();
+
         Assert.Null(status);
+    }
+
+    [Fact]
+    public async Task Returns_null_on_fuel_timeout()
+    {
+        var handler = new ScriptedHttpMessageHandler(request =>
+            request.RequestUri!.ToString() == AuthUrl
+                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
+                : throw new TaskCanceledException("timeout"));
+        var store = new InMemorySmartcarTokenStore("refresh-1");
+
+        var status = await Build(handler, store).GetFuelStatusAsync();
+
+        Assert.Null(status);
+    }
+
+    [Fact]
+    public async Task Propagates_genuine_caller_cancellation()
+    {
+        // A real caller cancellation must NOT be swallowed as "data unavailable".
+        var handler = new ScriptedHttpMessageHandler(_ => throw new OperationCanceledException());
+        var store = new InMemorySmartcarTokenStore("refresh-1");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Build(handler, store).GetFuelStatusAsync(cts.Token));
     }
 
     [Fact]

@@ -78,6 +78,21 @@ internal sealed class InMemorySmartcarTokenStore : ISmartcarTokenStore
     }
 }
 
+// TimeProvider whose clock can be advanced by hand, so tests can drive the access-token cache expiry.
+internal sealed class MutableTimeProvider : TimeProvider
+{
+    private DateTimeOffset _now;
+
+    public MutableTimeProvider(DateTimeOffset start)
+    {
+        _now = start;
+    }
+
+    public override DateTimeOffset GetUtcNow() => _now;
+
+    public void Advance(TimeSpan by) => _now = _now.Add(by);
+}
+
 // ISmartcarTokenStore that throws on Get and/or Save, mimicking the RequestFailedException the real
 // TableSmartcarTokenStore raises on a transient Azure Table Storage failure.
 internal sealed class ThrowingSmartcarTokenStore : ISmartcarTokenStore

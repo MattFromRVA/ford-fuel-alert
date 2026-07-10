@@ -34,6 +34,11 @@ public sealed class SmartcarFuelService : IFuelService
     private string? _accessToken;
     private DateTimeOffset _accessTokenExpiresUtc;
 
+    // Most recent refresh token held in memory. Since Smartcar rotates the token on every exchange,
+    // this is the freshest value — preferred over the store read, so a failed persist can't make a
+    // later run present a stale (already-invalidated) token and strand the integration.
+    private string? _refreshToken;
+
     public SmartcarFuelService(
         IHttpClientFactory httpClientFactory,
         ISmartcarTokenStore tokenStore,
@@ -75,9 +80,15 @@ public sealed class SmartcarFuelService : IFuelService
 
         try
         {
-            // Prefer the persisted (rotated) token; fall back to the configured bootstrap token on first run.
-            // The store read is inside the try so a transient Table Storage failure degrades to null too.
-            var refreshToken = await _tokenStore.GetRefreshTokenAsync(cancellationToken);
+            // Prefer the in-memory rotated token, then the persisted one, then the configured bootstrap
+            // token on first run. The store read is inside the try so a transient Table Storage failure
+            // degrades to null too.
+            var refreshToken = _refreshToken;
+            if (string.IsNullOrWhiteSpace(refreshToken))
+            {
+                refreshToken = await _tokenStore.GetRefreshTokenAsync(cancellationToken);
+            }
+
             if (string.IsNullOrWhiteSpace(refreshToken))
             {
                 refreshToken = _options.RefreshToken;
@@ -116,16 +127,36 @@ public sealed class SmartcarFuelService : IFuelService
                 return null;
             }
 
-            // Smartcar rotates the refresh token on every exchange — persist the new one immediately,
-            // before the fuel call, so a later failure cannot strand the integration.
+            // Smartcar rotates the refresh token on every exchange. Retain the new one in memory
+            // first (so it survives even if the store write fails), then try to persist it. A failed
+            // persist is logged but does NOT abort the run — we still hold a valid access token, and
+            // the retained token is retried on the next exchange.
             if (!string.IsNullOrWhiteSpace(token.RefreshToken))
             {
-                await _tokenStore.SaveRefreshTokenAsync(token.RefreshToken, cancellationToken);
+                _refreshToken = token.RefreshToken;
+                try
+                {
+                    await _tokenStore.SaveRefreshTokenAsync(token.RefreshToken, cancellationToken);
+                }
+                catch (RequestFailedException ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Failed to persist the rotated Smartcar refresh token; retained in memory and will retry next run. "
+                        + "If the host recycles before it persists, re-authorization may be required.");
+                }
             }
 
             _accessToken = token.AccessToken;
             _accessTokenExpiresUtc = now.AddSeconds(Math.Max(0, token.ExpiresIn - ExpiryBufferSeconds));
             return _accessToken;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // HttpClient surfaces a request timeout as (Task)OperationCanceledException even when the
+            // caller didn't cancel — treat that as unavailable data, but let real cancellation propagate.
+            _logger.LogWarning("Smartcar token exchange timed out; treating fuel data as unavailable.");
+            return null;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or RequestFailedException)
         {
@@ -182,6 +213,11 @@ public sealed class SmartcarFuelService : IFuelService
                 RetrievedAtUtc = _timeProvider.GetUtcNow(),
                 VehicleId = _options.VehicleId,
             };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Smartcar fuel request timed out; treating fuel data as unavailable.");
+            return null;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException)
         {
