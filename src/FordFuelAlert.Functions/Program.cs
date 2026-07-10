@@ -38,9 +38,14 @@ var host = new HostBuilder()
             services.AddSingleton<IFuelService, SmartcarFuelService>();
         }
 
-        // Email provider. Default = console (logs instead of sending).
-        // TODO: Add SendGrid / Azure Communication Services and select via Email__Provider.
-        services.AddSingleton<IEmailService, ConsoleEmailService>();
+        // Email provider. Email__Provider selects "console" (logs instead of sending, default) or
+        // "acs" (Azure Communication Services). Invalid ACS config throws here on first resolution.
+        services.AddSingleton<IEmailService>(provider =>
+        {
+            var emailOptions = configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>() ?? new EmailOptions();
+            var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+            return EmailServiceFactory.Create(emailOptions, loggerFactory);
+        });
 
         // Alert state store. AlertState__Provider selects "file" (local JSON, default) or "table" (Azure Table Storage, durable).
         services.AddSingleton<IAlertStateService>(provider =>

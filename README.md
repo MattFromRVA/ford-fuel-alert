@@ -36,8 +36,8 @@ CheckFuelLevelFunction            Functions/CheckFuelLevelFunction.cs  (thin tri
 FuelAlertService                  Services/FuelAlertService.cs  (all decision logic, unit-tested)
    │            │            │
    │            │            └─ IAlertStateService ─► FileAlertStateService (JSON on disk, dev) / TableAlertStateService (Azure Table Storage)
-   │            └─────────────── IEmailService      ─► ConsoleEmailService  (logs the email)  [TODO: SendGrid / ACS]
-   └──────────────────────────── IFuelService       ─► FakeFuelService      (config values)   [TODO: SmartcarFuelService]
+   │            └─────────────── IEmailService      ─► ConsoleEmailService  (logs the email, dev) / AcsEmailService (Azure Communication Services)
+   └──────────────────────────── IFuelService       ─► FakeFuelService      (config values, default) / SmartcarFuelService (live Smartcar API)
 ```
 
 Everything behind an interface is swappable via dependency injection in `Program.cs`.
@@ -50,9 +50,10 @@ src/FordFuelAlert.Functions/
   Abstractions/               IFuelService, IEmailService, IAlertStateService
   Models/                     FuelStatus, AlertState, EmailMessage, FuelAlertResult, *Options
   Services/                   FuelAlertService, FakeFuelService, ConsoleEmailService,
+                              AcsEmailService, EmailServiceFactory,
                               FileAlertStateService, TableAlertStateService,
-                              AlertStateServiceFactory, SmartcarFuelService*
-                              (* = placeholder, not wired up yet)
+                              AlertStateServiceFactory, SmartcarFuelService,
+                              TableSmartcarTokenStore, SmartcarTokenStoreFactory
 tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel service
 ```
 
@@ -150,9 +151,10 @@ Names use the double-underscore convention that binds to options sections.
 | `Smartcar__ConnectionString`     | *(none)*         | Refresh-token store: storage connection string. **Secret.**    |
 | `Smartcar__ServiceUri`           | *(none)*         | Refresh-token store: table endpoint for managed identity (preferred over the connection string in Azure). |
 | `Smartcar__TableName`            | `SmartcarTokens` | Refresh-token store: table name.                               |
-| `Email__Provider`                | `console`        | Selects the email implementation (only `console` today).       |
-| `Email__ApiKey`                  | *(none)*         | Future email provider API key. **Secret.**                     |
-| `Email__FromAddress`             | *(none)*         | Future "from" address for real email.                          |
+| `Email__Provider`                | `console`        | `console` = logs the email (dev default); `acs` = Azure Communication Services. |
+| `Email__FromAddress`             | *(none)*         | "From" address. For `acs`, a verified sender on your provisioned domain. Required when `Provider=acs`. |
+| `Email__AcsConnectionString`     | *(none)*         | `acs` provider: connection string (endpoint + access key). **Secret.**  |
+| `Email__AcsEndpoint`             | *(none)*         | `acs` provider: resource endpoint for managed identity (preferred over the connection string in Azure). |
 
 `AzureWebJobsStorage` and `FUNCTIONS_WORKER_RUNTIME` (`dotnet-isolated`) are required by the host.
 
@@ -209,7 +211,9 @@ HTTP handler; live cutover happens in a later E2E issue. Notes for operating it:
      The Functions file system is ephemeral, so the default file-based state is **local development only**.
      Prefer `AlertState__ServiceUri` + managed identity (grant the app **Storage Table Data Contributor**)
      over a connection string.
-   - `ConsoleEmailService` → a real provider (SendGrid or Azure Communication Services) behind `IEmailService`.
+   - Set `Email__Provider=acs` (with `Email__FromAddress` and either `Email__AcsConnectionString` or
+     `Email__AcsEndpoint` + managed identity) so alerts send via Azure Communication Services instead of
+     just logging to the console.
    - `FakeFuelService` → `SmartcarFuelService` once implemented.
 4. Ensure `AzureWebJobsStorage` points at a real storage account.
 5. Adjust the schedule in `CheckFuelLevelFunction` if you want a cadence other than every 2 hours.

@@ -23,7 +23,8 @@
     "Smartcar__ServiceUri": "",
     "Smartcar__TableName": "SmartcarTokens",
     "Email__Provider": "console",
-    "Email__ApiKey": "",
-    "Email__FromAddress": "alerts@example.com"
+    "Email__FromAddress": "alerts@example.com",
+    "Email__AcsConnectionString": "",
+    "Email__AcsEndpoint": ""
   }
 }
