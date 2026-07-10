@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: ford-fuel-alert
+metadata:
+  template: ford-fuel-alert@0.0.1
+services:
+  fuel-alert:
+    project: src/FordFuelAlert.Functions
+    language: dotnet
+    host: function

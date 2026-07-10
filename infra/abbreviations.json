@@ -1,0 +1,10 @@
+{
+  "logAnalyticsWorkspace": "log-",
+  "applicationInsights": "appi-",
+  "storageAccount": "st",
+  "communicationServices": "acs-",
+  "emailServices": "acsmail-",
+  "keyVault": "kv-",
+  "appServicePlan": "plan-",
+  "functionApp": "func-"
+}
