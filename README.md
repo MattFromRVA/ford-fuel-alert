@@ -264,9 +264,11 @@ az deployment sub create \
 
 ### Notes
 
-- **`dotnetVersion` defaults to `10.0`** to match this project's `net10.0` target. If a region has
-  not yet enabled .NET 10 on Flex Consumption, pass a supported value
-  (e.g. `--parameters dotnetVersion=9.0`) until it does.
+- **`dotnetVersion` defaults to `10.0`** to match this project's `net10.0` target. The runtime
+  version and the app's target framework must move together: a `net10.0` build will not load on a
+  .NET 9 Flex runtime. If your region has not yet enabled .NET 10 on Flex Consumption, prefer a
+  region that has; otherwise retarget the project to `net9.0` **and** pass
+  `--parameters dotnetVersion=9.0` until .NET 10 is available.
 - Compile the templates locally with `az bicep build --file infra/main.bicep`.
 
 ---
