@@ -87,7 +87,7 @@ Before implementing any behavior, check whether an existing class already owns i
 - **Duplicate suppression.** While `AlertSent == true`, repeated low readings send nothing. No email is sent on reset either.
 - **Unavailable data is a defined no-op.** A null `PercentRemaining` logs a warning, saves `LastCheckedUtc`, and makes no alert decision. It does not send, reset, or throw.
 - **Every run persists state** (`LastCheckedUtc`, `LastKnownPercent`, `LastKnownRangeMiles`) — even the unavailable-data path.
-- **Missing recipient email is a warning, not an error** — the alert is still "sent" (logged) so the state machine behaves identically with and without configuration.
+- **Missing recipient email is a warning, not an error — with the console provider.** `ConsoleEmailService` logs the alert with a placeholder recipient so the state machine behaves identically with and without configuration. `AcsEmailService` deliberately throws on a missing/invalid recipient instead of sending garbage to ACS — real deployments with `Email__Provider=acs` must set `FuelAlert__RecipientEmail`.
 - **Time comes from the injected `TimeProvider`** in business logic — never `DateTime.Now`/`DateTimeOffset.UtcNow` inside `FuelAlertService`. This is what makes time-dependent assertions testable.
 
 ---
