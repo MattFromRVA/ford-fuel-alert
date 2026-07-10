@@ -37,7 +37,7 @@ FuelAlertService                  Services/FuelAlertService.cs  (all decision lo
    │            │            │
    │            │            └─ IAlertStateService ─► FileAlertStateService (JSON on disk, dev) / TableAlertStateService (Azure Table Storage)
    │            └─────────────── IEmailService      ─► ConsoleEmailService  (logs the email, dev) / AcsEmailService (Azure Communication Services)
-   └──────────────────────────── IFuelService       ─► FakeFuelService      (config values)   [TODO: SmartcarFuelService]
+   └──────────────────────────── IFuelService       ─► FakeFuelService      (config values, default) / SmartcarFuelService (live Smartcar API)
 ```
 
 Everything behind an interface is swappable via dependency injection in `Program.cs`.
@@ -52,8 +52,8 @@ src/FordFuelAlert.Functions/
   Services/                   FuelAlertService, FakeFuelService, ConsoleEmailService,
                               AcsEmailService, EmailServiceFactory,
                               FileAlertStateService, TableAlertStateService,
-                              AlertStateServiceFactory, SmartcarFuelService*
-                              (* = placeholder, not wired up yet)
+                              AlertStateServiceFactory, SmartcarFuelService,
+                              TableSmartcarTokenStore, SmartcarTokenStoreFactory
 tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel service
 ```
 
@@ -136,7 +136,7 @@ Names use the double-underscore convention that binds to options sections.
 | `FuelAlert__ResetPercent`        | `40`             | Clear the alert when fuel `% >=` this value.                   |
 | `FuelAlert__RecipientEmail`      | *(none)*         | Where the alert email is addressed.                            |
 | `FuelAlert__VehicleId`           | *(none)*         | Identifier for the vehicle being checked.                      |
-| `FuelAlert__UseFakeFuelService`  | `true`           | `true` = fake provider; `false` routes to Smartcar (TODO).     |
+| `FuelAlert__UseFakeFuelService`  | `true`           | `true` = fake provider; `false` routes to the real Smartcar provider. |
 | `FakeFuel__PercentRemaining`     | *(none)*         | Fake fuel %. Empty = simulate "unavailable".                   |
 | `FakeFuel__RangeMiles`           | *(none)*         | Fake estimated range in miles (optional).                      |
 | `AlertState__Provider`           | `file`           | `file` = local JSON (dev only); `table` = Azure Table Storage. |
@@ -144,9 +144,13 @@ Names use the double-underscore convention that binds to options sections.
 | `AlertState__ConnectionString`   | *(none)*         | `table` provider: storage connection string. **Secret.**       |
 | `AlertState__ServiceUri`         | *(none)*         | `table` provider: table endpoint for managed identity (preferred over the connection string in Azure). |
 | `AlertState__TableName`          | `FuelAlertState` | `table` provider: table name.                                  |
-| `Smartcar__ClientId`             | *(none)*         | Future Smartcar OAuth client id.                               |
-| `Smartcar__ClientSecret`         | *(none)*         | Future Smartcar OAuth client secret. **Secret.**               |
-| `Smartcar__RefreshToken`         | *(none)*         | Future Smartcar refresh token. **Secret.**                     |
+| `Smartcar__ClientId`             | *(none)*         | Smartcar OAuth client id (required when `UseFakeFuelService=false`). |
+| `Smartcar__ClientSecret`         | *(none)*         | Smartcar OAuth client secret. **Secret.**                      |
+| `Smartcar__RefreshToken`         | *(none)*         | Bootstrap refresh token from onboarding. **Secret.** Seeds an empty token store; thereafter the rotated token lives in Table Storage. |
+| `Smartcar__VehicleId`            | *(none)*         | Smartcar vehicle id (UUID) — the `{id}` in `GET /vehicles/{id}/fuel`. |
+| `Smartcar__ConnectionString`     | *(none)*         | Refresh-token store: storage connection string. **Secret.**    |
+| `Smartcar__ServiceUri`           | *(none)*         | Refresh-token store: table endpoint for managed identity (preferred over the connection string in Azure). |
+| `Smartcar__TableName`            | `SmartcarTokens` | Refresh-token store: table name.                               |
 | `Email__Provider`                | `console`        | `console` = logs the email (dev default); `acs` = Azure Communication Services. |
 | `Email__FromAddress`             | *(none)*         | "From" address. For `acs`, a verified sender on your provisioned domain. Required when `Provider=acs`. |
 | `Email__AcsConnectionString`     | *(none)*         | `acs` provider: connection string (endpoint + access key). **Secret.**  |
@@ -174,15 +178,24 @@ range (if available), and the time the reading was taken.
 
 ---
 
-## Future: Smartcar / Ford authorization
+## Smartcar / Ford authorization
 
-The real vehicle-data integration is intentionally **not** built yet. When adding it:
+`SmartcarFuelService` reads the real vehicle's fuel level via the [Smartcar API](https://smartcar.com/docs)
+and is selected by setting `FuelAlert__UseFakeFuelService=false`. It is unit-tested with a mocked
+HTTP handler; live cutover happens in a later E2E issue. Notes for operating it:
 
-- Implement `SmartcarFuelService` (placeholder exists with TODOs) behind the existing `IFuelService`,
-  and flip `FuelAlert__UseFakeFuelService` to `false`.
-- Use **Smartcar Connect (OAuth)**: the vehicle owner explicitly authorizes access, after which you
-  receive a refresh token. Store `Smartcar__*` values in Key Vault, never in source.
-- Map the provider response onto `FuelStatus` (`PercentRemaining` 0–100, `RangeMiles`, `RetrievedAtUtc`).
+- Use **Smartcar Connect (OAuth)**: the vehicle owner explicitly authorizes access (a separate
+  one-time onboarding step), after which you receive a refresh token. Store `Smartcar__*` secrets in
+  Key Vault, never in source.
+- The service exchanges the refresh token for an access token at
+  `https://auth.smartcar.com/oauth/token`, then calls `GET /vehicles/{id}/fuel`. Smartcar returns
+  `percentRemaining` as a 0–1 decimal, which is scaled to the `FuelStatus` 0–100 contract; `range` is
+  requested in imperial units (miles).
+- **Refresh tokens rotate on every exchange.** The rotated token is persisted durably in Azure Table
+  Storage (`Smartcar__ConnectionString`/`ServiceUri`, `Smartcar__TableName`); `Smartcar__RefreshToken`
+  only seeds an empty store on first run.
+- Rate limits, an asleep vehicle, API errors, or unparseable responses degrade to "data unavailable"
+  (a logged warning + `null`) rather than throwing — the alert logic already treats `null` as a no-op.
 - **Do not** guess undocumented API details — follow the official Smartcar (or Ford developer) docs.
 - **Do not** use unofficial FordPass scraping, and **never** store Ford account usernames/passwords.
 
