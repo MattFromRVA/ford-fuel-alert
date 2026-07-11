@@ -248,14 +248,11 @@ infra/
 `APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlert__*`
 (with `UseFakeFuelService=true` — the E2E work flips it), `AlertState__Provider=table` +
 `AlertState__ServiceUri` + `AlertState__TableName`, `Email__Provider=acs` + `Email__FromAddress`,
-and Key Vault references for `Email__ConnectionString` (and `Smartcar__ClientSecret` /
+and Key Vault references for `Email__AcsConnectionString` (and `Smartcar__ClientSecret` /
 `Smartcar__RefreshToken` when those secrets are supplied).
 
 > On **Flex Consumption**, the worker runtime is set through `functionAppConfig.runtime`
 > (`dotnet-isolated`), which replaces the classic `FUNCTIONS_WORKER_RUNTIME` app setting.
-> The template wires the ACS secret to `Email__ConnectionString`, but the implemented
-> `AcsEmailService` reads `Email__AcsConnectionString` (or `Email__AcsEndpoint` + managed identity) —
-> the setting names need to be aligned as part of the live cutover.
 
 ### Deploy
 
@@ -278,6 +275,49 @@ az deployment sub create \
   --parameters environmentName=ffa-dev location=eastus2 \
                recipientEmail=you@example.com vehicleId=demo-vehicle \
   --what-if     # drop --what-if to actually deploy
+```
+
+### Continuous deployment (GitHub Actions)
+
+Code deploys automatically: every push to `main` runs [CI](.github/workflows/ci.yml), and when it
+succeeds, [Deploy](.github/workflows/deploy.yml) publishes the Functions project and deploys it to
+the Function App (it checks out the exact commit CI validated). It can also be run manually from the
+Actions tab (`workflow_dispatch`).
+
+Auth is **OIDC federated credentials** — no publish profiles or long-lived secrets in the repo. The
+workflow logs in with `azure/login` using these repository **variables** (identifiers, not secrets):
+
+| Variable                  | Value                                                        |
+| ------------------------- | ------------------------------------------------------------ |
+| `AZURE_CLIENT_ID`         | App registration used by GitHub Actions                     |
+| `AZURE_TENANT_ID`         | Entra tenant                                                 |
+| `AZURE_SUBSCRIPTION_ID`   | Target subscription                                          |
+| `AZURE_FUNCTION_APP_NAME` | Function App created by the Bicep deployment                 |
+
+One-time setup (already done for this repo — recorded here so it's reproducible):
+
+```bash
+# App registration + service principal for GitHub Actions
+appId=$(az ad app create --display-name github-ford-fuel-alert-deploy --query appId -o tsv)
+az ad sp create --id "$appId"
+
+# Trust GitHub Actions tokens for the main branch of this repo
+az ad app federated-credential create --id "$appId" --parameters '{
+  "name": "github-main-branch",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:MattFromRVA/ford-fuel-alert:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+
+# Least scope: Contributor on the app's resource group only
+az role assignment create --assignee "$appId" --role Contributor \
+  --scope "/subscriptions/<sub-id>/resourceGroups/<rg-name>"
+
+# Expose the IDs to the workflow as Actions variables
+gh variable set AZURE_CLIENT_ID --body "$appId"
+gh variable set AZURE_TENANT_ID --body "$(az account show --query tenantId -o tsv)"
+gh variable set AZURE_SUBSCRIPTION_ID --body "$(az account show --query id -o tsv)"
+gh variable set AZURE_FUNCTION_APP_NAME --body "<function-app-name>"
 ```
 
 ### Notes

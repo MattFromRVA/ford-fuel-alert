@@ -125,7 +125,7 @@ var baseAppSettings = [
     value: emailSenderAddress
   }
   {
-    name: 'Email__ConnectionString'
+    name: 'Email__AcsConnectionString'
     value: '@Microsoft.KeyVault(SecretUri=${acsConnectionStringSecretUri})'
   }
 ]
