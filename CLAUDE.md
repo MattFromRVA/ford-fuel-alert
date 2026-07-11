@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # FordFuelAlert
 
-FordFuelAlert is a small personal utility: a timer-triggered Azure Function (.NET 10 isolated worker) that checks a vehicle's fuel level every 2 hours and emails when it gets low. **The current version deliberately uses a fake fuel service** — no Smartcar or Ford APIs are integrated yet. The point of this phase is to prove the Function, alert/reset state machine, email logic, persistence, and tests with sample data, leaving clean extension points (interfaces + DI) for the real provider later.
+FordFuelAlert is a small personal utility: a timer-triggered Azure Function (.NET 10 isolated worker) that checks a vehicle's fuel level every 2 hours and emails when it gets low. The real Smartcar fuel provider, Azure Communication Services email, and Azure Table Storage state are all implemented, but **the fake fuel service remains the default** (`FuelAlert__UseFakeFuelService=true`) so the Function, alert/reset state machine, email logic, persistence, and tests run locally with sample data. Providers are swappable behind interfaces + DI, selected by configuration.
 
 Always reference these instructions first and fall back to search or bash commands only when you encounter unexpected information that does not match the info here.
 
@@ -35,17 +35,17 @@ If the pull/merge introduces conflicts, resolve them before touching ticket work
 
 ## Scope and Out-of-Scope Concerns
 
-### The fake-first design is intentional — do not "finish" it uninvited
+### The fake provider stays the default — do not change that uninvited
 
-- **`Services/SmartcarFuelService.cs` and `Services/TableAlertStateService.cs` are deliberate placeholders** that throw `NotImplementedException`. Do not implement, delete, or register them unless the ticket explicitly targets the Smartcar or durable-state integration. Their TODO comments describe the intended implementation path — follow those when the time comes.
-- **Keep `FuelAlert__UseFakeFuelService=true`** in samples and defaults until `SmartcarFuelService` is actually implemented.
-- **Do not add graceful degradation or extra fallbacks** to the fake provider — unavailable fuel data (null percent) already has defined behavior: log a warning, update `LastCheckedUtc`, send nothing.
+- **`SmartcarFuelService` and `TableAlertStateService` are fully implemented and registered** (selected via `FuelAlert__UseFakeFuelService=false` and `AlertState__Provider=table` respectively). Do not modify them unless the ticket explicitly targets the Smartcar or durable-state integration.
+- **Keep `FuelAlert__UseFakeFuelService=true`** in samples and defaults — local dev and tests run against the fake provider; the Smartcar provider is opted into per deployment.
+- **Do not add graceful degradation or extra fallbacks** to the fuel providers — unavailable fuel data (null percent) already has defined behavior: log a warning, update `LastCheckedUtc`, send nothing.
 
 ### General out-of-scope rules
 
-- **Do not add new NuGet packages** without explicit permission. The Functions project intentionally has a minimal dependency set. (`Azure.Data.Tables` is the pre-approved exception when implementing `TableAlertStateService` — its TODO says so.)
+- **Do not add new NuGet packages** without explicit permission. The Functions project intentionally has a minimal dependency set (`Azure.Data.Tables`, `Azure.Communication.Email`, `Azure.Identity`, plus the Functions worker/hosting packages).
 - **Do not refactor code outside the scope of your ticket.** File a separate ticket or mention it in the PR description instead.
-- **Do not introduce new abstractions** beyond the three existing interfaces (`IFuelService`, `IEmailService`, `IAlertStateService`) unless the ticket explicitly requires them. No MediatR, AutoMapper, base classes, etc.
+- **Do not introduce new abstractions** beyond the four existing interfaces (`IFuelService`, `IEmailService`, `IAlertStateService`, `ISmartcarTokenStore`) unless the ticket explicitly requires them. No MediatR, AutoMapper, base classes, etc.
 - **Do not add logging frameworks.** The project uses `ILogger<T>` from the worker host; keep it that way.
 
 ### Security rules (non-negotiable, from README)
@@ -54,7 +54,7 @@ If the pull/merge introduces conflicts, resolve them before touching ticket work
 - **Never store Ford account usernames/passwords, and never scrape FordPass** or other unofficial endpoints.
 - **No secrets in source control.** `local.settings.json` is gitignored; commit only `local.settings.sample.json` with placeholders. Cloud secrets go in Key Vault.
 - **Logs never print secrets.** Log only whether a credential is configured, never its value (see the pattern in `SmartcarFuelService`).
-- **Do not guess undocumented API details** — follow official Smartcar / Ford developer docs when implementing the real provider.
+- **Do not guess undocumented API details** — follow official Smartcar / Ford developer docs when changing the real provider.
 
 ---
 
@@ -63,7 +63,7 @@ If the pull/merge introduces conflicts, resolve them before touching ticket work
 Before writing any code for a ticket, verify that the ticket's description matches the current state of the codebase:
 
 1. **If the ticket references a file, class, or method, open it first** and confirm it exists with the structure the ticket describes.
-2. **If the ticket says "create X" but X already exists**, stop. Do not create a duplicate — the existing implementation may need extending instead. (This repo already has placeholder classes for the two known future integrations.)
+2. **If the ticket says "create X" but X already exists**, stop. Do not create a duplicate — the existing implementation may need extending instead. (The Smartcar, ACS email, and Table Storage integrations all already exist — extend them, don't recreate them.)
 3. **If the ticket says "modify X" and X doesn't exist**, stop and flag the discrepancy rather than guessing what was meant.
 4. **If the ticket says "mirror behavior from Y" and Y has changed since the ticket was written**, follow the current behavior of Y and note the discrepancy in the PR description.
 
@@ -75,11 +75,11 @@ Before implementing any behavior, check whether an existing class already owns i
 
 - **Alert/reset decision logic (the whole state machine)** → `Services/FuelAlertService.cs` (`EvaluateAsync`). It is deliberately free of Azure Functions types so it can be unit-tested directly. Do not put threshold comparisons, dedup checks, or reset logic in the Function, an email service, or anywhere else.
 - **The Azure Function is a thin trigger** → `Functions/CheckFuelLevelFunction.cs` only logs start/finish and calls `EvaluateAsync`. Keep it that way. The schedule is the NCRONTAB expression on its `[TimerTrigger]` attribute (`0 0 */2 * * *` = every 2 hours).
-- **Fuel data retrieval** → implementations of `Abstractions/IFuelService.cs` (`FakeFuelService` today; `SmartcarFuelService` later). Providers map onto `Models/FuelStatus.cs` (`PercentRemaining` 0–100, `RangeMiles`, `RetrievedAtUtc`).
-- **Email delivery** → implementations of `Abstractions/IEmailService.cs` (`ConsoleEmailService` today; SendGrid / Azure Communication Services later, selected via `Email__Provider`). Email *content* is built in `FuelAlertService.BuildAlertEmail`, not in the email service.
-- **State persistence** → implementations of `Abstractions/IAlertStateService.cs` (`FileAlertStateService` for local dev; `TableAlertStateService` placeholder for Azure). State shape is `Models/AlertState.cs`.
+- **Fuel data retrieval** → implementations of `Abstractions/IFuelService.cs` (`FakeFuelService` by default; `SmartcarFuelService` when `FuelAlert__UseFakeFuelService=false`). Providers map onto `Models/FuelStatus.cs` (`PercentRemaining` 0–100, `RangeMiles`, `RetrievedAtUtc`).
+- **Email delivery** → implementations of `Abstractions/IEmailService.cs` (`ConsoleEmailService` by default; `AcsEmailService` for Azure Communication Services — selected via `Email__Provider` in `EmailServiceFactory`). Email *content* is built in `FuelAlertService.BuildAlertEmail`, not in the email service.
+- **State persistence** → implementations of `Abstractions/IAlertStateService.cs` (`FileAlertStateService` for local dev; `TableAlertStateService` for Azure Table Storage — selected via `AlertState__Provider` in `AlertStateServiceFactory`). State shape is `Models/AlertState.cs`.
 - **Provider selection and all DI wiring** → `Program.cs`. New swappable implementations get registered there behind the existing interfaces, chosen by configuration.
-- **Configuration** → options classes in `Models/` (`FuelAlertOptions`, `FakeFuelOptions`, `SmartcarOptions`, `EmailOptions`), each with a `SectionName` constant, bound in `Program.cs`. Settings use the double-underscore convention (`FuelAlert__ThresholdPercent`). The full settings table lives in `README.md` — keep it updated when adding settings, and add new settings to `local.settings.sample.json` with placeholder values.
+- **Configuration** → options classes in `Models/` (`FuelAlertOptions`, `FakeFuelOptions`, `SmartcarOptions`, `EmailOptions`, `AlertStateOptions`), each with a `SectionName` constant, bound in `Program.cs`. Settings use the double-underscore convention (`FuelAlert__ThresholdPercent`). The full settings table lives in `README.md` — keep it updated when adding settings, and add new settings to `local.settings.sample.json` with placeholder values.
 
 ### Behavioral invariants (each exists on purpose — do not "simplify" them away)
 
@@ -87,7 +87,7 @@ Before implementing any behavior, check whether an existing class already owns i
 - **Duplicate suppression.** While `AlertSent == true`, repeated low readings send nothing. No email is sent on reset either.
 - **Unavailable data is a defined no-op.** A null `PercentRemaining` logs a warning, saves `LastCheckedUtc`, and makes no alert decision. It does not send, reset, or throw.
 - **Every run persists state** (`LastCheckedUtc`, `LastKnownPercent`, `LastKnownRangeMiles`) — even the unavailable-data path.
-- **Missing recipient email is a warning, not an error** — the alert is still "sent" (logged) so the state machine behaves identically with and without configuration.
+- **Missing recipient email is a warning, not an error — with the console provider.** `ConsoleEmailService` logs the alert with a placeholder recipient so the state machine behaves identically with and without configuration. `AcsEmailService` deliberately throws on a missing/invalid recipient instead of sending garbage to ACS — real deployments with `Email__Provider=acs` must set `FuelAlert__RecipientEmail`.
 - **Time comes from the injected `TimeProvider`** in business logic — never `DateTime.Now`/`DateTimeOffset.UtcNow` inside `FuelAlertService`. This is what makes time-dependent assertions testable.
 
 ---
@@ -98,17 +98,22 @@ Standard `src/` + `tests/` layout, one solution file (`FordFuelAlert.slnx`):
 
 ```
 src/FordFuelAlert.Functions/
-  Program.cs                  DI wiring (chooses fake vs. Smartcar, console email, file state)
+  Program.cs                  DI wiring (fake vs. Smartcar fuel, console vs. ACS email, file vs. table state)
   host.json
   Functions/                  CheckFuelLevelFunction (thin timer trigger)
-  Abstractions/               IFuelService, IEmailService, IAlertStateService
+  Abstractions/               IFuelService, IEmailService, IAlertStateService, ISmartcarTokenStore
   Models/                     FuelStatus, AlertState, EmailMessage, FuelAlertResult, *Options
-  Services/                   FuelAlertService, FakeFuelService, ConsoleEmailService,
-                              FileAlertStateService, SmartcarFuelService*, TableAlertStateService*
-                              (* = placeholder, not wired up)
+  Services/                   FuelAlertService, FakeFuelService, SmartcarFuelService,
+                              ConsoleEmailService, AcsEmailService, FileAlertStateService,
+                              TableAlertStateService, TableSmartcarTokenStore, and the
+                              EmailServiceFactory / AlertStateServiceFactory /
+                              SmartcarTokenStoreFactory provider selectors
 tests/FordFuelAlert.Tests/
   FuelAlertServiceTests.cs    State-machine coverage (thresholds, dedup, reset, unavailable data)
   FakeFuelServiceTests.cs     Fake provider config parsing
+  SmartcarFuelServiceTests.cs, AcsEmailServiceTests.cs, TableAlertStateServiceTests.cs,
+  EmailServiceFactoryTests.cs, AlertStateServiceFactoryTests.cs
+                              Real-provider and factory-selection coverage
   Fakes/TestDoubles.cs        StubFuelService, RecordingEmailService, InMemoryAlertStateService
 ```
 
