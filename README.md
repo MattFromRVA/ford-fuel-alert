@@ -3,9 +3,10 @@
 A small personal utility: a timer-triggered Azure Function (.NET isolated worker) that periodically
 checks a vehicle's fuel level and emails when it gets low.
 
-> **First pass uses a *fake* fuel service.** No Smartcar or Ford APIs are integrated yet. The goal of
-> this version is to prove the Function, alert logic, email logic, state handling, and tests all work
-> with sample data — then leave clean extension points for a real vehicle-data provider later.
+> **The fake fuel service is the default, but the real providers are implemented.**
+> `SmartcarFuelService` (live Smartcar API), `AcsEmailService` (Azure Communication Services email),
+> and `TableAlertStateService` (Azure Table Storage) all exist and are opt-in via configuration.
+> The fake provider stays the default (`FuelAlert__UseFakeFuelService=true`) until the live E2E cutover.
 
 ---
 
@@ -13,7 +14,7 @@ checks a vehicle's fuel level and emails when it gets low.
 
 On a schedule (every 2 hours by default), the function:
 
-1. Reads the current fuel status from an `IFuelService` (currently the **fake** provider).
+1. Reads the current fuel status from an `IFuelService` (the **fake** provider by default).
 2. If fuel `% <= threshold` (default **25%**) **and** no alert has been sent yet → sends a "Ford fuel is low" email and records that an alert was sent.
 3. Suppresses repeat emails while the alert is active (no duplicate spam every run).
 4. Resets the alert once fuel rises back to `% >= reset` (default **40%**), so the next low reading can alert again.
@@ -44,7 +45,7 @@ Everything behind an interface is swappable via dependency injection in `Program
 
 ```
 src/FordFuelAlert.Functions/
-  Program.cs                  DI wiring (chooses fake vs. Smartcar, console email, file state)
+  Program.cs                  DI wiring (selects the fuel, email, and state providers via configuration)
   host.json
   Functions/CheckFuelLevelFunction.cs
   Abstractions/               IFuelService, IEmailService, IAlertStateService
@@ -64,8 +65,9 @@ tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel 
 Integrating a real vehicle-data provider (Smartcar / official Ford APIs) requires OAuth onboarding,
 vehicle-owner authorization, and live credentials. By starting with a fake provider we can build and
 *prove* the parts that are entirely ours — scheduling, the alert/reset state machine, email
-formatting, persistence, and tests — without waiting on any of that. The real provider then slots in
-behind the existing `IFuelService` interface with no changes to the alert logic.
+formatting, persistence, and tests — without waiting on any of that. The real Smartcar provider has
+since been implemented behind that same `IFuelService` interface — with no changes to the alert
+logic — and is enabled by setting `FuelAlert__UseFakeFuelService=false`.
 
 ---
 
@@ -251,8 +253,9 @@ and Key Vault references for `Email__ConnectionString` (and `Smartcar__ClientSec
 
 > On **Flex Consumption**, the worker runtime is set through `functionAppConfig.runtime`
 > (`dotnet-isolated`), which replaces the classic `FUNCTIONS_WORKER_RUNTIME` app setting.
-> `Email__ConnectionString` is wired ahead of the ACS-email service implementation (a separate
-> issue); the current `ConsoleEmailService` does not read it.
+> The template wires the ACS secret to `Email__ConnectionString`, but the implemented
+> `AcsEmailService` reads `Email__AcsConnectionString` (or `Email__AcsEndpoint` + managed identity) —
+> the setting names need to be aligned as part of the live cutover.
 
 ### Deploy
 
@@ -303,7 +306,8 @@ az deployment sub create \
    - Set `Email__Provider=acs` (with `Email__FromAddress` and either `Email__AcsConnectionString` or
      `Email__AcsEndpoint` + managed identity) so alerts send via Azure Communication Services instead of
      just logging to the console.
-   - `FakeFuelService` → `SmartcarFuelService` once implemented.
+   - Set `FuelAlert__UseFakeFuelService=false` (plus the `Smartcar__*` settings) to switch from
+     `FakeFuelService` to `SmartcarFuelService`.
 4. Ensure `AzureWebJobsStorage` points at a real storage account.
 5. Adjust the schedule in `CheckFuelLevelFunction` if you want a cadence other than every 2 hours.
 
