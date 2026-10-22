@@ -16,9 +16,6 @@
     },
     "smartcarClientSecret": {
       "value": "${SMARTCAR_CLIENT_SECRET}"
-    },
-    "smartcarRefreshToken": {
-      "value": "${SMARTCAR_REFRESH_TOKEN}"
     }
   }
 }

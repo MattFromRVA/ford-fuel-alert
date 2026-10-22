@@ -10,19 +10,12 @@ param tags object = {}
 @description('Name of the ACS resource whose connection string is stored as a secret.')
 param communicationServiceName string
 
-@description('Smartcar OAuth client secret. Only stored when createSmartcarClientSecret is true.')
+@description('Smartcar API client secret. Only stored when createSmartcarClientSecret is true.')
 @secure()
 param smartcarClientSecret string = ''
 
-@description('Smartcar OAuth refresh token. Only stored when createSmartcarRefreshToken is true.')
-@secure()
-param smartcarRefreshToken string = ''
-
 @description('Whether to create the Smartcar client-secret secret. Kept separate from the secure value so outputs stay untainted.')
 param createSmartcarClientSecret bool = false
-
-@description('Whether to create the Smartcar refresh-token secret.')
-param createSmartcarRefreshToken bool = false
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
@@ -60,15 +53,6 @@ resource smartcarClientSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-0
   }
 }
 
-resource smartcarRefreshTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createSmartcarRefreshToken) {
-  parent: keyVault
-  name: 'smartcar-refresh-token'
-  properties: {
-    value: smartcarRefreshToken
-  }
-}
-
 output keyVaultName string = keyVault.name
 output acsConnectionStringSecretUri string = acsConnectionStringSecret.properties.secretUri
 output smartcarClientSecretUri string = createSmartcarClientSecret ? '${keyVault.properties.vaultUri}secrets/smartcar-client-secret' : ''
-output smartcarRefreshTokenUri string = createSmartcarRefreshToken ? '${keyVault.properties.vaultUri}secrets/smartcar-refresh-token' : ''

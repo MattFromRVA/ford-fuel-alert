@@ -1,4 +1,3 @@
-using Azure;
 using FordFuelAlert.Functions.Abstractions;
 using FordFuelAlert.Functions.Models;
 
@@ -54,30 +53,6 @@ internal sealed class InMemoryAlertStateService : IAlertStateService
     }
 }
 
-internal sealed class InMemorySmartcarTokenStore : ISmartcarTokenStore
-{
-    public InMemorySmartcarTokenStore(string? initial = null)
-    {
-        Current = initial;
-    }
-
-    public string? Current { get; set; }
-
-    public int SaveCount { get; private set; }
-
-    public Task<string?> GetRefreshTokenAsync(CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(Current);
-    }
-
-    public Task SaveRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default)
-    {
-        Current = refreshToken;
-        SaveCount++;
-        return Task.CompletedTask;
-    }
-}
-
 // TimeProvider whose clock can be advanced by hand, so tests can drive the access-token cache expiry.
 internal sealed class MutableTimeProvider : TimeProvider
 {
@@ -91,40 +66,6 @@ internal sealed class MutableTimeProvider : TimeProvider
     public override DateTimeOffset GetUtcNow() => _now;
 
     public void Advance(TimeSpan by) => _now = _now.Add(by);
-}
-
-// ISmartcarTokenStore that throws on Get and/or Save, mimicking the RequestFailedException the real
-// TableSmartcarTokenStore raises on a transient Azure Table Storage failure.
-internal sealed class ThrowingSmartcarTokenStore : ISmartcarTokenStore
-{
-    private readonly bool _throwOnGet;
-    private readonly bool _throwOnSave;
-
-    public ThrowingSmartcarTokenStore(bool throwOnGet = false, bool throwOnSave = false)
-    {
-        _throwOnGet = throwOnGet;
-        _throwOnSave = throwOnSave;
-    }
-
-    public Task<string?> GetRefreshTokenAsync(CancellationToken cancellationToken = default)
-    {
-        if (_throwOnGet)
-        {
-            throw new RequestFailedException(503, "table unavailable");
-        }
-
-        return Task.FromResult<string?>("refresh-1");
-    }
-
-    public Task SaveRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default)
-    {
-        if (_throwOnSave)
-        {
-            throw new RequestFailedException(429, "throttled");
-        }
-
-        return Task.CompletedTask;
-    }
 }
 
 // Scripts HTTP responses per request so SmartcarFuelService can be tested without the network.

@@ -45,7 +45,7 @@ If the pull/merge introduces conflicts, resolve them before touching ticket work
 
 - **Do not add new NuGet packages** without explicit permission. The Functions project intentionally has a minimal dependency set (`Azure.Data.Tables`, `Azure.Communication.Email`, `Azure.Identity`, plus the Functions worker/hosting packages).
 - **Do not refactor code outside the scope of your ticket.** File a separate ticket or mention it in the PR description instead.
-- **Do not introduce new abstractions** beyond the four existing interfaces (`IFuelService`, `IEmailService`, `IAlertStateService`, `ISmartcarTokenStore`) unless the ticket explicitly requires them. No MediatR, AutoMapper, base classes, etc.
+- **Do not introduce new abstractions** beyond the three existing interfaces (`IFuelService`, `IEmailService`, `IAlertStateService`) unless the ticket explicitly requires them. No MediatR, AutoMapper, base classes, etc.
 - **Do not add logging frameworks.** The project uses `ILogger<T>` from the worker host; keep it that way.
 
 ### Security rules (non-negotiable, from README)
@@ -101,13 +101,12 @@ src/FordFuelAlert.Functions/
   Program.cs                  DI wiring (fake vs. Smartcar fuel, console vs. ACS email, file vs. table state)
   host.json
   Functions/                  CheckFuelLevelFunction (thin timer trigger)
-  Abstractions/               IFuelService, IEmailService, IAlertStateService, ISmartcarTokenStore
+  Abstractions/               IFuelService, IEmailService, IAlertStateService
   Models/                     FuelStatus, AlertState, EmailMessage, FuelAlertResult, *Options
   Services/                   FuelAlertService, FakeFuelService, SmartcarFuelService,
                               ConsoleEmailService, AcsEmailService, FileAlertStateService,
-                              TableAlertStateService, TableSmartcarTokenStore, and the
-                              EmailServiceFactory / AlertStateServiceFactory /
-                              SmartcarTokenStoreFactory provider selectors
+                              TableAlertStateService, and the EmailServiceFactory /
+                              AlertStateServiceFactory provider selectors
 tests/FordFuelAlert.Tests/
   FuelAlertServiceTests.cs    State-machine coverage (thresholds, dedup, reset, unavailable data)
   FakeFuelServiceTests.cs     Fake provider config parsing
