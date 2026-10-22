@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text;
-using FordFuelAlert.Functions.Abstractions;
+using System.Text.Json;
 using FordFuelAlert.Functions.Models;
 using FordFuelAlert.Functions.Services;
 using FordFuelAlert.Tests.Fakes;
@@ -9,289 +9,363 @@ using Microsoft.Extensions.Options;
 
 namespace FordFuelAlert.Tests;
 
+// Response shapes follow Smartcar's v3 docs: Request Access Token (client credentials), Get Signal
+// (data.attributes.status/body + data.meta.retrievedAt), and List Connections
+// (data[].relationships.vehicle.data.id).
 public class SmartcarFuelServiceTests
 {
-    private const string AuthUrl = "https://auth.smartcar.com/oauth/token";
-    private const string FuelPath = "/vehicles/veh-1/fuel";
+    private const string TokenUrl = "https://iam.smartcar.com/oauth2/token";
+    private const string ApiBase = "https://vehicle.api.smartcar.com/v3";
+    private const string FuelLevelPath = "/vehicles/veh-1/signals/internalcombustionengine-fuellevel";
+    private const string RangePath = "/vehicles/veh-1/signals/internalcombustionengine-range";
+    private const string ConnectionsPath = "/connections";
 
-    private static string TokenJson(string accessToken, string refreshToken, int expiresIn = 7200) =>
-        $$"""{"access_token":"{{accessToken}}","token_type":"Bearer","expires_in":{{expiresIn}},"refresh_token":"{{refreshToken}}"}""";
+    private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-22T12:00:00Z");
 
-    private static string FuelJson(double percentRemaining, double amountRemaining, double range) =>
-        $$"""{"percentRemaining":{{percentRemaining}},"amountRemaining":{{amountRemaining}},"range":{{range}}}""";
+    private static string TokenJson(string accessToken = "access-1", int expiresIn = 3600) =>
+        $$"""{"access_token":"{{accessToken}}","token_type":"Bearer","expires_in":{{expiresIn}}}""";
+
+    private static string SignalJson(
+        string code,
+        double? value,
+        string? unit,
+        string status = "SUCCESS",
+        string retrievedAt = "2026-10-22T11:58:00Z") =>
+        JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                id = code,
+                type = "signal",
+                attributes = new
+                {
+                    code,
+                    name = "n",
+                    group = "InternalCombustionEngine",
+                    status = new { value = status },
+                    body = new { value, unit },
+                },
+                meta = new { retrievedAt, oemUpdatedAt = retrievedAt },
+            },
+            included = new { vehicle = new { id = "veh-1", type = "vehicle", attributes = new { make = "FORD", mode = "live" } } },
+        });
+
+    private static string ConnectionsJson(params string[] vehicleIds) =>
+        JsonSerializer.Serialize(new
+        {
+            data = vehicleIds.Select(id => new
+            {
+                id = $"conn-{id}",
+                type = "connection",
+                attributes = new { permissions = new[] { "read_fuel" }, user = new { id = "user-1" }, vehicle = new { make = "FORD" } },
+                relationships = new
+                {
+                    vehicle = new { data = new { id, type = "vehicle" } },
+                    user = new { data = new { id = "user-1", type = "user" } },
+                },
+            }),
+            meta = new { pageNumber = 1, pageSize = 10, totalCount = vehicleIds.Length },
+        });
 
     private static HttpResponseMessage Json(HttpStatusCode status, string body) =>
         new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
+    private static bool Is(HttpRequestMessage request, string path) =>
+        request.RequestUri!.GetLeftPart(UriPartial.Path).EndsWith(path, StringComparison.Ordinal);
+
+    private static SmartcarOptions DefaultOptions() => new()
+    {
+        ClientId = "client-1",
+        ClientSecret = "secret-1",
+        UserId = "user-1",
+        VehicleId = "veh-1",
+    };
+
     private static SmartcarFuelService Build(
         ScriptedHttpMessageHandler handler,
-        ISmartcarTokenStore tokenStore,
         SmartcarOptions? options = null,
         TimeProvider? timeProvider = null)
     {
-        options ??= new SmartcarOptions
-        {
-            ClientId = "client-1",
-            ClientSecret = "secret-1",
-            VehicleId = "veh-1",
-        };
-
         return new SmartcarFuelService(
             new SingleHandlerHttpClientFactory(handler),
-            tokenStore,
-            Options.Create(options),
-            timeProvider ?? TimeProvider.System,
+            Options.Create(options ?? DefaultOptions()),
+            timeProvider ?? new MutableTimeProvider(Now),
             NullLogger<SmartcarFuelService>.Instance);
     }
 
-    // Routes the two Smartcar calls: token exchange (auth host) and the fuel endpoint (api host).
-    private static ScriptedHttpMessageHandler HappyHandler(
-        string newRefreshToken = "refresh-2",
-        double percent = 0.4,
-        double range = 150) =>
+    // Routes the Smartcar calls: token (iam host), connections, and the two signals (vehicle API host).
+    // Any override returns non-null to replace the default response for that call.
+    private static ScriptedHttpMessageHandler Handler(
+        Func<HttpRequestMessage, HttpResponseMessage>? fuelLevel = null,
+        Func<HttpRequestMessage, HttpResponseMessage>? range = null,
+        Func<HttpRequestMessage, HttpResponseMessage>? token = null,
+        Func<HttpRequestMessage, HttpResponseMessage>? connections = null) =>
         new(request =>
         {
-            var url = request.RequestUri!.ToString();
-            if (url == AuthUrl)
+            if (request.RequestUri!.ToString() == TokenUrl)
             {
-                return Json(HttpStatusCode.OK, TokenJson("access-1", newRefreshToken));
+                return token?.Invoke(request) ?? Json(HttpStatusCode.OK, TokenJson());
             }
 
-            if (url.EndsWith(FuelPath, StringComparison.Ordinal))
+            if (Is(request, ConnectionsPath))
             {
-                return Json(HttpStatusCode.OK, FuelJson(percent, 20, range));
+                return connections?.Invoke(request) ?? Json(HttpStatusCode.OK, ConnectionsJson("veh-1"));
+            }
+
+            if (Is(request, FuelLevelPath))
+            {
+                return fuelLevel?.Invoke(request)
+                    ?? Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-fuellevel", 40, "percent"));
+            }
+
+            if (Is(request, RangePath))
+            {
+                return range?.Invoke(request)
+                    ?? Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-range", 160.9344, "km"));
             }
 
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
     [Fact]
-    public async Task Happy_path_maps_fuel_status_and_scales_percent()
+    public async Task Happy_path_maps_percent_as_is_and_converts_km_range_to_miles()
     {
-        var handler = HappyHandler(percent: 0.4, range: 150);
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-
-        var status = await Build(handler, store).GetFuelStatusAsync();
+        var status = await Build(Handler()).GetFuelStatusAsync();
 
         Assert.NotNull(status);
-        Assert.Equal(40d, status!.PercentRemaining);   // 0.4 (0-1) scaled to 0-100
-        Assert.Equal(150d, status.RangeMiles);
+        Assert.Equal(40d, status!.PercentRemaining);            // v3 is already 0-100; no scaling
+        Assert.Equal(100d, status.RangeMiles!.Value, precision: 3); // 160.9344 km
         Assert.Equal("veh-1", status.VehicleId);
+        Assert.Equal(DateTimeOffset.Parse("2026-10-22T11:58:00Z"), status.RetrievedAtUtc);
     }
 
     [Fact]
-    public async Task Persists_rotated_refresh_token()
+    public async Task Passes_range_in_miles_through_unchanged()
     {
-        var handler = HappyHandler(newRefreshToken: "refresh-2");
-        var store = new InMemorySmartcarTokenStore("refresh-1");
+        var handler = Handler(range: _ =>
+            Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-range", 150, "miles")));
 
-        await Build(handler, store).GetFuelStatusAsync();
+        var status = await Build(handler).GetFuelStatusAsync();
 
-        Assert.Equal("refresh-2", store.Current);
-        Assert.Equal(1, store.SaveCount);
+        Assert.Equal(150d, status!.RangeMiles);
     }
 
     [Fact]
-    public async Task Uses_config_refresh_token_to_seed_empty_store()
+    public async Task Requests_app_token_with_client_credentials_in_form_body()
     {
-        var handler = HappyHandler();
-        var store = new InMemorySmartcarTokenStore(initial: null);
-        var options = new SmartcarOptions
-        {
-            ClientId = "client-1",
-            ClientSecret = "secret-1",
-            VehicleId = "veh-1",
-            RefreshToken = "seed-token",
-        };
+        var handler = Handler();
 
-        await Build(handler, store, options).GetFuelStatusAsync();
+        await Build(handler).GetFuelStatusAsync();
 
-        var body = handler.BodyFor(AuthUrl);
+        var tokenRequest = handler.Requests.Single(r => r.RequestUri!.ToString() == TokenUrl);
+        Assert.Equal(HttpMethod.Post, tokenRequest.Method);
+        Assert.Null(tokenRequest.Headers.Authorization); // credentials go in the body, not Basic auth
+
+        var body = handler.BodyFor(TokenUrl);
         Assert.NotNull(body);
-        Assert.Contains("refresh_token=seed-token", body);
+        Assert.Contains("grant_type=client_credentials", body);
+        Assert.Contains("client_id=client-1", body);
+        Assert.Contains("client_secret=secret-1", body);
     }
 
     [Fact]
-    public async Task Sends_basic_auth_on_token_call_and_bearer_imperial_on_fuel_call()
+    public async Task Sends_bearer_token_and_sc_user_id_on_signal_requests()
     {
-        var handler = HappyHandler();
-        var store = new InMemorySmartcarTokenStore("refresh-1");
+        var handler = Handler();
 
-        await Build(handler, store).GetFuelStatusAsync();
+        await Build(handler).GetFuelStatusAsync();
 
-        var authRequest = handler.Requests.Single(r => r.RequestUri!.ToString() == AuthUrl);
-        Assert.Equal("Basic", authRequest.Headers.Authorization!.Scheme);
-
-        var fuelRequest = handler.Requests.Single(r => r.RequestUri!.ToString().EndsWith(FuelPath, StringComparison.Ordinal));
-        Assert.Equal("Bearer", fuelRequest.Headers.Authorization!.Scheme);
-        Assert.Equal("access-1", fuelRequest.Headers.Authorization.Parameter);
-        Assert.Equal("imperial", fuelRequest.Headers.GetValues("SC-Unit-System").Single());
-    }
-
-    [Fact]
-    public async Task Returns_null_and_makes_no_fuel_call_when_token_exchange_fails()
-    {
-        var handler = new ScriptedHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-
-        var status = await Build(handler, store).GetFuelStatusAsync();
-
-        Assert.Null(status);
-        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.ToString().EndsWith(FuelPath, StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task Returns_null_when_fuel_call_returns_error_status()
-    {
-        var handler = new ScriptedHttpMessageHandler(request =>
-            request.RequestUri!.ToString() == AuthUrl
-                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
-                : new HttpResponseMessage((HttpStatusCode)429));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-
-        var status = await Build(handler, store).GetFuelStatusAsync();
-
-        Assert.Null(status);
-        // The rotated token was already persisted during the (successful) token exchange.
-        Assert.Equal("refresh-2", store.Current);
-    }
-
-    [Fact]
-    public async Task Returns_null_on_transport_exception()
-    {
-        var handler = new ScriptedHttpMessageHandler(request =>
+        foreach (var path in new[] { FuelLevelPath, RangePath })
         {
-            if (request.RequestUri!.ToString() == AuthUrl)
-            {
-                return Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"));
-            }
-
-            throw new HttpRequestException("connection reset");
-        });
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-
-        var status = await Build(handler, store).GetFuelStatusAsync();
-
-        Assert.Null(status);
+            var request = handler.Requests.Single(r => Is(r, path));
+            Assert.Equal(ApiBase + path, request.RequestUri!.ToString());
+            Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
+            Assert.Equal("access-1", request.Headers.Authorization.Parameter);
+            Assert.Equal("user-1", request.Headers.GetValues("sc-user-id").Single());
+        }
     }
 
     [Fact]
-    public async Task Returns_null_on_malformed_fuel_json()
-    {
-        var handler = new ScriptedHttpMessageHandler(request =>
-            request.RequestUri!.ToString() == AuthUrl
-                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
-                : Json(HttpStatusCode.OK, "this is not json"));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-
-        var status = await Build(handler, store).GetFuelStatusAsync();
-
-        Assert.Null(status);
-    }
-
-    [Fact]
-    public async Task Returns_null_and_makes_no_http_calls_when_no_refresh_token_available()
+    public async Task Returns_null_and_makes_no_http_calls_when_user_id_missing()
     {
         var handler = new ScriptedHttpMessageHandler(_ => throw new InvalidOperationException("should not be called"));
-        var store = new InMemorySmartcarTokenStore(initial: null);
-        var options = new SmartcarOptions { ClientId = "client-1", ClientSecret = "secret-1", VehicleId = "veh-1" };
+        var options = DefaultOptions();
+        options.UserId = "";
 
-        var status = await Build(handler, store, options).GetFuelStatusAsync();
+        var status = await Build(handler, options).GetFuelStatusAsync();
 
         Assert.Null(status);
         Assert.Empty(handler.Requests);
     }
 
     [Fact]
-    public async Task Caches_access_token_across_calls()
+    public async Task Returns_null_and_makes_no_http_calls_when_client_credentials_missing()
     {
-        var handler = HappyHandler();
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-        var service = Build(handler, store);
+        var handler = new ScriptedHttpMessageHandler(_ => throw new InvalidOperationException("should not be called"));
+        var options = DefaultOptions();
+        options.ClientSecret = null;
 
-        await service.GetFuelStatusAsync();
-        await service.GetFuelStatusAsync();
+        var status = await Build(handler, options).GetFuelStatusAsync();
 
-        Assert.Single(handler.Requests, r => r.RequestUri!.ToString() == AuthUrl);
-        Assert.Equal(2, handler.Requests.Count(r => r.RequestUri!.ToString().EndsWith(FuelPath, StringComparison.Ordinal)));
+        Assert.Null(status);
+        Assert.Empty(handler.Requests);
     }
 
     [Fact]
-    public async Task Returns_null_when_token_store_read_throws()
+    public async Task Returns_null_and_makes_no_signal_call_when_token_request_fails()
     {
-        // Transient Azure Table Storage failure while reading the stored token must degrade to null,
-        // not crash the timer run (the "every failure path degrades to null" contract).
-        var handler = HappyHandler();
-        var store = new ThrowingSmartcarTokenStore(throwOnGet: true);
+        var handler = Handler(token: _ => new HttpResponseMessage(HttpStatusCode.BadRequest));
 
-        var status = await Build(handler, store).GetFuelStatusAsync();
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.Null(status);
+        Assert.DoesNotContain(handler.Requests, r => Is(r, FuelLevelPath));
+    }
+
+    [Fact]
+    public async Task Caches_app_token_until_it_nears_expiry()
+    {
+        var handler = Handler();
+        var clock = new MutableTimeProvider(Now);
+        var service = Build(handler, timeProvider: clock);
+
+        await service.GetFuelStatusAsync();
+        clock.Advance(TimeSpan.FromMinutes(30));
+        await service.GetFuelStatusAsync(); // still inside the 1-hour token lifetime
+        clock.Advance(TimeSpan.FromMinutes(30));
+        await service.GetFuelStatusAsync(); // past expiry minus the 60s buffer
+
+        Assert.Equal(2, handler.Requests.Count(r => r.RequestUri!.ToString() == TokenUrl));
+        Assert.Equal(3, handler.Requests.Count(r => Is(r, FuelLevelPath)));
+    }
+
+    [Fact]
+    public async Task Invalidates_cached_token_on_unauthorized_signal_response()
+    {
+        // A 401 means the cached token is dead server-side; the next run must request a new one
+        // rather than reuse it for the rest of the hour.
+        var handler = Handler(fuelLevel: _ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+        var service = Build(handler);
+
+        await service.GetFuelStatusAsync();
+        await service.GetFuelStatusAsync();
+
+        Assert.Equal(2, handler.Requests.Count(r => r.RequestUri!.ToString() == TokenUrl));
+    }
+
+    [Fact]
+    public async Task Returns_null_when_fuel_level_request_returns_error_status()
+    {
+        var handler = Handler(fuelLevel: _ => new HttpResponseMessage((HttpStatusCode)429));
+
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.Null(status);
+        Assert.DoesNotContain(handler.Requests, r => Is(r, RangePath));
+    }
+
+    [Theory]
+    [InlineData("UNAVAILABLE")]
+    [InlineData("ERROR")]
+    public async Task Returns_null_percent_when_fuel_level_status_is_not_success(string signalStatus)
+    {
+        // Data-unavailable (manufacturer gap, vehicle asleep): a FuelStatus with null percent, which
+        // the alert logic already treats as "no decision".
+        var handler = Handler(fuelLevel: _ =>
+            Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-fuellevel", null, null, signalStatus)));
+
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.NotNull(status);
+        Assert.Null(status!.PercentRemaining);
+    }
+
+    [Fact]
+    public async Task Returns_null_percent_when_fuel_level_unit_is_not_percent()
+    {
+        var handler = Handler(fuelLevel: _ =>
+            Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-fuellevel", 12, "gallons")));
+
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.NotNull(status);
+        Assert.Null(status!.PercentRemaining);
+    }
+
+    [Fact]
+    public async Task Keeps_percent_when_range_request_fails()
+    {
+        var handler = Handler(range: _ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.Equal(40d, status!.PercentRemaining);
+        Assert.Null(status.RangeMiles);
+    }
+
+    [Fact]
+    public async Task Omits_range_in_unknown_unit()
+    {
+        var handler = Handler(range: _ =>
+            Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-range", 300, "furlongs")));
+
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.Equal(40d, status!.PercentRemaining);
+        Assert.Null(status.RangeMiles);
+    }
+
+    [Fact]
+    public async Task Falls_back_to_clock_when_signal_has_no_retrieved_at()
+    {
+        var handler = Handler(fuelLevel: _ => Json(
+            HttpStatusCode.OK,
+            """{"data":{"attributes":{"status":{"value":"SUCCESS"},"body":{"value":30,"unit":"percent"}}}}"""));
+
+        var status = await Build(handler).GetFuelStatusAsync();
+
+        Assert.Equal(30d, status!.PercentRemaining);
+        Assert.Equal(Now, status.RetrievedAtUtc);
+    }
+
+    [Fact]
+    public async Task Returns_null_on_transport_exception()
+    {
+        var handler = Handler(fuelLevel: _ => throw new HttpRequestException("connection reset"));
+
+        var status = await Build(handler).GetFuelStatusAsync();
 
         Assert.Null(status);
     }
 
     [Fact]
-    public async Task Still_returns_fuel_when_token_store_save_throws()
+    public async Task Returns_null_on_malformed_signal_json()
     {
-        // Previously asserted null. Changed after PR #15 review (P1): the token exchange already
-        // succeeded and we hold a valid access token, so a failed *persist* must not throw away this
-        // run's reading. The rotated token is retained in memory (see the retention test below) and
-        // persistence is retried next exchange, rather than stranding the integration.
-        var handler = HappyHandler();
-        var store = new ThrowingSmartcarTokenStore(throwOnSave: true);
+        var handler = Handler(fuelLevel: _ => Json(HttpStatusCode.OK, "this is not json"));
 
-        var status = await Build(handler, store).GetFuelStatusAsync();
+        var status = await Build(handler).GetFuelStatusAsync();
 
-        Assert.NotNull(status);
-        Assert.Equal(40d, status!.PercentRemaining);
+        Assert.Null(status);
     }
 
     [Fact]
-    public async Task Retains_rotated_token_in_memory_when_save_fails()
-    {
-        // Save keeps failing, but the rotated token must survive in memory so the next exchange uses
-        // it — not the stale token the store still returns (which Smartcar has already invalidated).
-        var handler = new ScriptedHttpMessageHandler(request =>
-            request.RequestUri!.ToString() == AuthUrl
-                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
-                : Json(HttpStatusCode.OK, FuelJson(0.4, 20, 150)));
-        var store = new ThrowingSmartcarTokenStore(throwOnSave: true); // Get returns stale "refresh-1"
-        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-09T00:00:00Z"));
-        var service = Build(handler, store, timeProvider: clock);
-
-        await service.GetFuelStatusAsync();
-        clock.Advance(TimeSpan.FromHours(3)); // past the ~2h access-token cache
-        await service.GetFuelStatusAsync();
-
-        var authBodies = handler.RequestBodies
-            .Where((_, i) => handler.Requests[i].RequestUri!.ToString() == AuthUrl)
-            .ToList();
-        Assert.Equal(2, authBodies.Count);
-        Assert.Contains("refresh_token=refresh-2", authBodies[1]); // second exchange uses the retained token
-    }
-
-    [Fact]
-    public async Task Returns_null_on_auth_timeout()
+    public async Task Returns_null_on_token_timeout()
     {
         // HttpClient surfaces a timeout as TaskCanceledException even when the caller didn't cancel;
         // that must degrade to null, not crash the timer run.
-        var handler = new ScriptedHttpMessageHandler(_ => throw new TaskCanceledException("timeout"));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
+        var handler = Handler(token: _ => throw new TaskCanceledException("timeout"));
 
-        var status = await Build(handler, store).GetFuelStatusAsync();
+        var status = await Build(handler).GetFuelStatusAsync();
 
         Assert.Null(status);
     }
 
     [Fact]
-    public async Task Returns_null_on_fuel_timeout()
+    public async Task Returns_null_on_fuel_level_timeout()
     {
-        var handler = new ScriptedHttpMessageHandler(request =>
-            request.RequestUri!.ToString() == AuthUrl
-                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
-                : throw new TaskCanceledException("timeout"));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
+        var handler = Handler(fuelLevel: _ => throw new TaskCanceledException("timeout"));
 
-        var status = await Build(handler, store).GetFuelStatusAsync();
+        var status = await Build(handler).GetFuelStatusAsync();
 
         Assert.Null(status);
     }
@@ -301,46 +375,95 @@ public class SmartcarFuelServiceTests
     {
         // A real caller cancellation must NOT be swallowed as "data unavailable".
         var handler = new ScriptedHttpMessageHandler(_ => throw new OperationCanceledException());
-        var store = new InMemorySmartcarTokenStore("refresh-1");
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => Build(handler, store).GetFuelStatusAsync(cts.Token));
+            () => Build(handler).GetFuelStatusAsync(cts.Token));
     }
 
     [Fact]
-    public async Task Invalidates_cached_access_token_on_unauthorized_fuel_response()
+    public async Task Discovers_vehicle_id_from_single_connection_when_not_configured()
     {
-        // A 401 means the cached token is dead server-side; the next run must re-exchange rather
-        // than reuse it for the whole cache window (else no fuel is read for up to ~2 hours).
-        var handler = new ScriptedHttpMessageHandler(request =>
-            request.RequestUri!.ToString() == AuthUrl
-                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
-                : new HttpResponseMessage(HttpStatusCode.Unauthorized));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
-        var service = Build(handler, store);
+        var handler = Handler();
+        var options = DefaultOptions();
+        options.VehicleId = null;
+        var service = Build(handler, options);
 
-        await service.GetFuelStatusAsync();
-        await service.GetFuelStatusAsync();
+        var first = await service.GetFuelStatusAsync();
+        var second = await service.GetFuelStatusAsync();
 
-        Assert.Equal(2, handler.Requests.Count(r => r.RequestUri!.ToString() == AuthUrl));
+        Assert.Equal("veh-1", first!.VehicleId);
+        Assert.Equal(40d, second!.PercentRemaining);
+
+        // Looked up once, then reused.
+        var connectionsRequest = handler.Requests.Single(r => Is(r, ConnectionsPath));
+        Assert.Equal("user-1", Uri.UnescapeDataString(connectionsRequest.RequestUri!.Query).Split("filter[userId]=")[1]);
+        Assert.Equal("access-1", connectionsRequest.Headers.Authorization!.Parameter);
     }
 
     [Fact]
-    public async Task Returns_null_when_percent_remaining_is_absent()
+    public async Task Skips_connection_lookup_when_vehicle_id_configured()
     {
-        var handler = new ScriptedHttpMessageHandler(request =>
-            request.RequestUri!.ToString() == AuthUrl
-                ? Json(HttpStatusCode.OK, TokenJson("access-1", "refresh-2"))
-                : Json(HttpStatusCode.OK, """{"percentRemaining":null,"amountRemaining":null,"range":null}"""));
-        var store = new InMemorySmartcarTokenStore("refresh-1");
+        var handler = Handler();
 
-        var status = await Build(handler, store).GetFuelStatusAsync();
+        await Build(handler).GetFuelStatusAsync();
 
-        // Data-unavailable (European vehicle / manufacturer gap): a FuelStatus with null percent,
-        // which the alert logic already treats as "no decision".
-        Assert.NotNull(status);
-        Assert.Null(status!.PercentRemaining);
+        Assert.DoesNotContain(handler.Requests, r => Is(r, ConnectionsPath));
+    }
+
+    [Theory]
+    [InlineData]
+    [InlineData("veh-1", "veh-2")]
+    public async Task Returns_null_when_vehicle_id_unset_and_connections_are_not_exactly_one(params string[] vehicleIds)
+    {
+        var handler = Handler(connections: _ => Json(HttpStatusCode.OK, ConnectionsJson(vehicleIds)));
+        var options = DefaultOptions();
+        options.VehicleId = null;
+
+        var status = await Build(handler, options).GetFuelStatusAsync();
+
+        Assert.Null(status);
+        Assert.DoesNotContain(handler.Requests, r => Is(r, FuelLevelPath));
+    }
+
+    [Fact]
+    public async Task Returns_null_when_connection_lookup_fails()
+    {
+        var handler = Handler(connections: _ => new HttpResponseMessage(HttpStatusCode.Forbidden));
+        var options = DefaultOptions();
+        options.VehicleId = null;
+
+        var status = await Build(handler, options).GetFuelStatusAsync();
+
+        Assert.Null(status);
+    }
+
+    [Fact]
+    public async Task Low_v3_reading_drives_the_alert_pipeline_end_to_end()
+    {
+        // Smartcar provider -> FuelAlertService state machine -> email, with only HTTP mocked.
+        var handler = Handler(
+            fuelLevel: _ => Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-fuellevel", 18, "percent")),
+            range: _ => Json(HttpStatusCode.OK, SignalJson("internalcombustionengine-range", 64.37376, "km")));
+        var email = new RecordingEmailService();
+        var state = new InMemoryAlertStateService();
+        var alerts = new FuelAlertService(
+            Build(handler),
+            email,
+            state,
+            Options.Create(new FuelAlertOptions()),
+            new MutableTimeProvider(Now),
+            NullLogger<FuelAlertService>.Instance);
+
+        var first = await alerts.EvaluateAsync();
+        var second = await alerts.EvaluateAsync();
+
+        Assert.True(first.AlertSent);
+        Assert.False(second.AlertSent); // duplicate suppression still applies
+        var message = Assert.Single(email.Sent);
+        Assert.Contains("18%", message.Body);
+        Assert.Equal(18d, state.Current!.LastKnownPercent);
+        Assert.Equal(40d, state.Current.LastKnownRangeMiles!.Value, precision: 3);
     }
 }

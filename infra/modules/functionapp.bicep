@@ -58,9 +58,6 @@ param acsConnectionStringSecretUri string
 @description('Key Vault secret URI for the Smartcar client secret. Empty = omit the setting.')
 param smartcarClientSecretUri string = ''
 
-@description('Key Vault secret URI for the Smartcar refresh token. Empty = omit the setting.')
-param smartcarRefreshTokenUri string = ''
-
 resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: appServicePlanName
   location: location
@@ -130,20 +127,12 @@ var baseAppSettings = [
   }
 ]
 
-var smartcarAppSettings = concat(
-  empty(smartcarClientSecretUri) ? [] : [
-    {
-      name: 'Smartcar__ClientSecret'
-      value: '@Microsoft.KeyVault(SecretUri=${smartcarClientSecretUri})'
-    }
-  ],
-  empty(smartcarRefreshTokenUri) ? [] : [
-    {
-      name: 'Smartcar__RefreshToken'
-      value: '@Microsoft.KeyVault(SecretUri=${smartcarRefreshTokenUri})'
-    }
-  ]
-)
+var smartcarAppSettings = empty(smartcarClientSecretUri) ? [] : [
+  {
+    name: 'Smartcar__ClientSecret'
+    value: '@Microsoft.KeyVault(SecretUri=${smartcarClientSecretUri})'
+  }
+]
 
 resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   name: functionAppName

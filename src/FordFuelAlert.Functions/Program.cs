@@ -29,12 +29,6 @@ var host = new HostBuilder()
         else
         {
             services.AddHttpClient();
-            services.AddSingleton<ISmartcarTokenStore>(provider =>
-            {
-                var smartcarOptions = configuration.GetSection(SmartcarOptions.SectionName).Get<SmartcarOptions>() ?? new SmartcarOptions();
-                var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
-                return SmartcarTokenStoreFactory.Create(smartcarOptions, loggerFactory);
-            });
             services.AddSingleton<IFuelService, SmartcarFuelService>();
         }
 

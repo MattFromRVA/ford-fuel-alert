@@ -53,8 +53,7 @@ src/FordFuelAlert.Functions/
   Services/                   FuelAlertService, FakeFuelService, ConsoleEmailService,
                               AcsEmailService, EmailServiceFactory,
                               FileAlertStateService, TableAlertStateService,
-                              AlertStateServiceFactory, SmartcarFuelService,
-                              TableSmartcarTokenStore, SmartcarTokenStoreFactory
+                              AlertStateServiceFactory, SmartcarFuelService
 tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel service
 ```
 
@@ -146,13 +145,10 @@ Names use the double-underscore convention that binds to options sections.
 | `AlertState__ConnectionString`   | *(none)*         | `table` provider: storage connection string. **Secret.**       |
 | `AlertState__ServiceUri`         | *(none)*         | `table` provider: table endpoint for managed identity (preferred over the connection string in Azure). |
 | `AlertState__TableName`          | `FuelAlertState` | `table` provider: table name.                                  |
-| `Smartcar__ClientId`             | *(none)*         | Smartcar OAuth client id (required when `UseFakeFuelService=false`). |
-| `Smartcar__ClientSecret`         | *(none)*         | Smartcar OAuth client secret. **Secret.**                      |
-| `Smartcar__RefreshToken`         | *(none)*         | Bootstrap refresh token from onboarding. **Secret.** Seeds an empty token store; thereafter the rotated token lives in Table Storage. |
-| `Smartcar__VehicleId`            | *(none)*         | Smartcar vehicle id (UUID) — the `{id}` in `GET /vehicles/{id}/fuel`. |
-| `Smartcar__ConnectionString`     | *(none)*         | Refresh-token store: storage connection string. **Secret.**    |
-| `Smartcar__ServiceUri`           | *(none)*         | Refresh-token store: table endpoint for managed identity (preferred over the connection string in Azure). |
-| `Smartcar__TableName`            | `SmartcarTokens` | Refresh-token store: table name.                               |
+| `Smartcar__ClientId`             | *(none)*         | Smartcar API client id, from the Dashboard's API Credentials tab (required when `UseFakeFuelService=false`). |
+| `Smartcar__ClientSecret`         | *(none)*         | Smartcar API client secret. **Secret.**                        |
+| `Smartcar__UserId`               | *(none)*         | Smartcar user id (UUID) of the vehicle owner, returned as `user_id` on the Connect redirect. Sent as the `sc-user-id` header. Required. |
+| `Smartcar__VehicleId`            | *(none)*         | Smartcar vehicle id — the `{vehicleId}` in `GET /vehicles/{vehicleId}/signals/...`. Optional: when empty, the vehicle is looked up from the user's connection (must be exactly one) and logged so it can be pinned. |
 | `Email__Provider`                | `console`        | `console` = logs the email (dev default); `acs` = Azure Communication Services. |
 | `Email__FromAddress`             | *(none)*         | "From" address. For `acs`, a verified sender on your provisioned domain. Required when `Provider=acs`. |
 | `Email__AcsConnectionString`     | *(none)*         | `acs` provider: connection string (endpoint + access key). **Secret.**  |
@@ -182,20 +178,24 @@ range (if available), and the time the reading was taken.
 
 ## Smartcar / Ford authorization
 
-`SmartcarFuelService` reads the real vehicle's fuel level via the [Smartcar API](https://smartcar.com/docs)
-and is selected by setting `FuelAlert__UseFakeFuelService=false`. It is unit-tested with a mocked
-HTTP handler; live cutover happens in a later E2E issue. Notes for operating it:
+`SmartcarFuelService` reads the real vehicle's fuel level via the
+[Smartcar Vehicle API v3](https://smartcar.com/docs/api-reference/vehicles-api-intro) and is selected
+by setting `FuelAlert__UseFakeFuelService=false`. (Smartcar retires API v2.0 on December 1, 2026.)
+It is unit-tested with a mocked HTTP handler. Notes for operating it:
 
-- Use **Smartcar Connect (OAuth)**: the vehicle owner explicitly authorizes access (a separate
-  one-time onboarding step), after which you receive a refresh token. Store `Smartcar__*` secrets in
-  Key Vault, never in source.
-- The service exchanges the refresh token for an access token at
-  `https://auth.smartcar.com/oauth/token`, then calls `GET /vehicles/{id}/fuel`. Smartcar returns
-  `percentRemaining` as a 0–1 decimal, which is scaled to the `FuelStatus` 0–100 contract; `range` is
-  requested in imperial units (miles).
-- **Refresh tokens rotate on every exchange.** The rotated token is persisted durably in Azure Table
-  Storage (`Smartcar__ConnectionString`/`ServiceUri`, `Smartcar__TableName`); `Smartcar__RefreshToken`
-  only seeds an empty store on first run.
+- Use **Smartcar Connect (OAuth)**: the vehicle owner explicitly authorizes access once (requesting
+  the `read_fuel` permission). The Connect redirect returns a `user_id`; set it as `Smartcar__UserId`.
+  Store `Smartcar__ClientSecret` in Key Vault, never in source.
+- Each run gets an application token with the client credentials grant at
+  `https://iam.smartcar.com/oauth2/token` (valid 1 hour, cached in memory; there is no refresh token
+  to persist), then reads the `internalcombustionengine-fuellevel` and `internalcombustionengine-range`
+  signals from `https://vehicle.api.smartcar.com/v3/vehicles/{vehicleId}/signals/{code}` with the
+  `sc-user-id` header.
+- Fuel level is already 0–100 (`unit: percent`). Range carries its own unit and is converted to
+  miles (km × 0.621371); an unknown unit, or a failed range read, just omits the range.
+- A signal status other than `SUCCESS` (`UNAVAILABLE`, `ERROR`) is treated as unavailable data.
+- If `Smartcar__VehicleId` is empty, the vehicle id is looked up once from
+  `GET /v3/connections?filter[userId]=...` and logged; set it explicitly if the user has more than one vehicle.
 - Rate limits, an asleep vehicle, API errors, or unparseable responses degrade to "data unavailable"
   (a logged warning + `null`) rather than throwing — the alert logic already treats `null` as a no-op.
 - **Do not** guess undocumented API details — follow the official Smartcar (or Ford developer) docs.
@@ -248,8 +248,9 @@ infra/
 `APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlert__*`
 (with `UseFakeFuelService=true` — the E2E work flips it), `AlertState__Provider=table` +
 `AlertState__ServiceUri` + `AlertState__TableName`, `Email__Provider=acs` + `Email__FromAddress`,
-and Key Vault references for `Email__AcsConnectionString` (and `Smartcar__ClientSecret` /
-`Smartcar__RefreshToken` when those secrets are supplied).
+and Key Vault references for `Email__AcsConnectionString` (and `Smartcar__ClientSecret` when that
+secret is supplied). `Smartcar__ClientId`, `Smartcar__UserId`, and `Smartcar__VehicleId` are not
+secrets and are set as plain app settings when the Smartcar provider is turned on.
 
 > On **Flex Consumption**, the worker runtime is set through `functionAppConfig.runtime`
 > (`dotnet-isolated`), which replaces the classic `FUNCTIONS_WORKER_RUNTIME` app setting.

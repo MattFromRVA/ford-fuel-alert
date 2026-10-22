@@ -32,13 +32,9 @@ param instanceMemoryMB int = 2048
 @description('ACS data location.')
 param dataLocation string = 'United States'
 
-@description('Smartcar OAuth client secret. Empty = secret not created.')
+@description('Smartcar API client secret. Empty = secret not created.')
 @secure()
 param smartcarClientSecret string = ''
-
-@description('Smartcar OAuth refresh token. Empty = secret not created.')
-@secure()
-param smartcarRefreshToken string = ''
 
 var abbrs = loadJsonContent('abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -48,7 +44,6 @@ var tags = {
 var deploymentContainerName = 'deployment-package'
 var stateTableName = 'FuelAlertState'
 var createSmartcarClientSecret = !empty(smartcarClientSecret)
-var createSmartcarRefreshToken = !empty(smartcarRefreshToken)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: 'rg-${environmentName}'
@@ -99,9 +94,7 @@ module keyVault 'modules/keyvault.bicep' = {
     tags: tags
     communicationServiceName: communication.outputs.communicationServiceName
     smartcarClientSecret: smartcarClientSecret
-    smartcarRefreshToken: smartcarRefreshToken
     createSmartcarClientSecret: createSmartcarClientSecret
-    createSmartcarRefreshToken: createSmartcarRefreshToken
   }
 }
 
@@ -129,7 +122,6 @@ module functionApp 'modules/functionapp.bicep' = {
     emailSenderAddress: communication.outputs.senderAddress
     acsConnectionStringSecretUri: keyVault.outputs.acsConnectionStringSecretUri
     smartcarClientSecretUri: keyVault.outputs.smartcarClientSecretUri
-    smartcarRefreshTokenUri: keyVault.outputs.smartcarRefreshTokenUri
   }
 }
 
