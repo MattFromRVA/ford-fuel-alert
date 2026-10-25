@@ -133,7 +133,7 @@ Names use the double-underscore convention that binds to options sections.
 
 | Setting                          | Default          | Purpose                                                        |
 | -------------------------------- | ---------------- | -------------------------------------------------------------- |
-| `FuelAlertSchedule`              | `0 0 */2 * * *`  | NCRONTAB schedule for the fuel check (the sample settings and Bicep set every 2 hours). Required: the function does not load without it. |
+| `FuelAlertSchedule`              | *(none, required)* | NCRONTAB schedule for the fuel check; the sample settings and Bicep set `0 0 */2 * * *` (every 2 hours). Required: the function does not load without it. |
 | `FuelAlert__ThresholdPercent`    | `25`             | Send an alert when fuel `% <=` this value.                     |
 | `FuelAlert__ResetPercent`        | `40`             | Clear the alert when fuel `% >=` this value.                   |
 | `FuelAlert__RecipientEmail`      | *(none)*         | Where the alert email is addressed.                            |
@@ -417,7 +417,7 @@ group; the workflow only publishes code.
    - Set `FuelAlert__UseFakeFuelService=false` (plus the `Smartcar__*` settings) to switch from
      `FakeFuelService` to `SmartcarFuelService`.
 4. Ensure `AzureWebJobsStorage` points at a real storage account.
-5. Set `FuelAlertSchedule` (NCRONTAB) in App Settings if you want a cadence other than every 2 hours.
+5. Set `FuelAlertSchedule` (NCRONTAB) in App Settings; it is required, and `0 0 */2 * * *` matches the default every-2-hours cadence.
 
 ---
 
