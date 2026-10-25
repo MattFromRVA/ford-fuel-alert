@@ -58,6 +58,24 @@ param acsConnectionStringSecretUri string
 @description('Key Vault secret URI for the Smartcar client secret. Empty = omit the setting.')
 param smartcarClientSecretUri string = ''
 
+@description('Smartcar API client id. Empty = setting omitted.')
+param smartcarClientId string = ''
+
+@description('Smartcar user id of the vehicle owner, returned by Smartcar Connect. Empty = setting omitted.')
+param smartcarUserId string = ''
+
+@description('Smartcar vehicle id. Empty = setting omitted and the provider looks it up from the user\'s single connection.')
+param smartcarVehicleId string = ''
+
+@description('true routes fuel reads to the fake provider; false uses the live Smartcar provider.')
+param useFakeFuelService bool = true
+
+@description('Fake provider fuel percent (0-100). Empty = setting omitted, which the app treats as unavailable data.')
+param fakeFuelPercentRemaining string = ''
+
+@description('Fake provider estimated range in miles. Empty = setting omitted.')
+param fakeFuelRangeMiles string = ''
+
 resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: appServicePlanName
   location: location
@@ -99,7 +117,7 @@ var baseAppSettings = [
   }
   {
     name: 'FuelAlert__UseFakeFuelService'
-    value: 'true'
+    value: useFakeFuelService ? 'true' : 'false'
   }
   {
     name: 'AlertState__Provider'
@@ -127,10 +145,45 @@ var baseAppSettings = [
   }
 ]
 
-var smartcarAppSettings = empty(smartcarClientSecretUri) ? [] : [
+var smartcarClientSecretSettings = empty(smartcarClientSecretUri) ? [] : [
   {
     name: 'Smartcar__ClientSecret'
     value: '@Microsoft.KeyVault(SecretUri=${smartcarClientSecretUri})'
+  }
+]
+
+var smartcarClientIdSettings = empty(smartcarClientId) ? [] : [
+  {
+    name: 'Smartcar__ClientId'
+    value: smartcarClientId
+  }
+]
+
+var smartcarUserIdSettings = empty(smartcarUserId) ? [] : [
+  {
+    name: 'Smartcar__UserId'
+    value: smartcarUserId
+  }
+]
+
+var smartcarVehicleIdSettings = empty(smartcarVehicleId) ? [] : [
+  {
+    name: 'Smartcar__VehicleId'
+    value: smartcarVehicleId
+  }
+]
+
+var fakeFuelPercentRemainingSettings = empty(fakeFuelPercentRemaining) ? [] : [
+  {
+    name: 'FakeFuel__PercentRemaining'
+    value: fakeFuelPercentRemaining
+  }
+]
+
+var fakeFuelRangeMilesSettings = empty(fakeFuelRangeMiles) ? [] : [
+  {
+    name: 'FakeFuel__RangeMiles'
+    value: fakeFuelRangeMiles
   }
 ]
 
@@ -166,7 +219,15 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       }
     }
     siteConfig: {
-      appSettings: concat(baseAppSettings, smartcarAppSettings)
+      appSettings: concat(
+        baseAppSettings,
+        smartcarClientSecretSettings,
+        smartcarClientIdSettings,
+        smartcarUserIdSettings,
+        smartcarVehicleIdSettings,
+        fakeFuelPercentRemainingSettings,
+        fakeFuelRangeMilesSettings
+      )
     }
   }
 }

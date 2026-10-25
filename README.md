@@ -231,7 +231,7 @@ infra/
 - A **Storage account** (shared-key access disabled) for host storage, the deployment package,
   and the durable alert-state table.
 - **Azure Communication Services + Email** with an Azure-managed domain (`DoNotReply@…`).
-- **Key Vault** (RBAC) holding the ACS connection string and, when supplied, the Smartcar secrets.
+- **Key Vault** (RBAC) holding the ACS connection string and, when supplied, the Smartcar client secret.
 - **Application Insights** (backed by a Log Analytics workspace) for the timer function's logs.
 
 ### Security model
@@ -245,12 +245,25 @@ infra/
 
 ### App settings wired by the template
 
-`APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlert__*`
-(with `UseFakeFuelService=true` — the E2E work flips it), `AlertState__Provider=table` +
-`AlertState__ServiceUri` + `AlertState__TableName`, `Email__Provider=acs` + `Email__FromAddress`,
-and Key Vault references for `Email__AcsConnectionString` (and `Smartcar__ClientSecret` when that
-secret is supplied). `Smartcar__ClientId`, `Smartcar__UserId`, and `Smartcar__VehicleId` are not
-secrets and are set as plain app settings when the Smartcar provider is turned on.
+`APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlert__*`,
+`AlertState__Provider=table` + `AlertState__ServiceUri` + `AlertState__TableName`,
+`Email__Provider=acs` + `Email__FromAddress`, and a Key Vault reference for
+`Email__AcsConnectionString`.
+
+- `FuelAlert__UseFakeFuelService` comes from the `useFakeFuelService` parameter (default `true`,
+  the fake provider).
+- `Smartcar__ClientId`, `Smartcar__UserId`, `Smartcar__VehicleId`, `FakeFuel__PercentRemaining`,
+  and `FakeFuel__RangeMiles` come from the `smartcarClientId`, `smartcarUserId`,
+  `smartcarVehicleId`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters and are
+  emitted only when the matching parameter is non-empty. `fakeFuelPercentRemaining` and
+  `fakeFuelRangeMiles` must be numeric; the template does not validate them, and a non-numeric
+  value fails at app startup.
+- `Smartcar__ClientSecret` is a Key Vault reference, created only when the secure
+  `smartcarClientSecret` parameter is supplied.
+
+`siteConfig.appSettings` is authoritative: a template deployment replaces the Function App's whole
+app-settings set, so a setting added by hand in the portal is removed on the next
+`az deployment` / `azd provision`. Production values must go through template parameters.
 
 > On **Flex Consumption**, the worker runtime is set through `functionAppConfig.runtime`
 > (`dotnet-isolated`), which replaces the classic `FUNCTIONS_WORKER_RUNTIME` app setting.
@@ -263,9 +276,22 @@ With `azd` (recommended):
 azd env new ffa-dev
 azd env set FUEL_ALERT_RECIPIENT_EMAIL you@example.com
 azd env set FUEL_ALERT_VEHICLE_ID demo-vehicle
+azd env set SMARTCAR_CLIENT_ID <client-id>
+azd env set SMARTCAR_USER_ID <smartcar-user-id>
+azd env set SMARTCAR_VEHICLE_ID <smartcar-vehicle-id>   # optional
+# azd env set USE_FAKE_FUEL_SERVICE false   # optional cutover: live Smartcar reads
 azd provision --preview   # what-if
 azd up                    # provision + deploy code
 ```
+
+`FUEL_ALERT_VEHICLE_ID` is the app's own label for the vehicle (used as the alert-state row key),
+while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it. `infra/main.parameters.json` also maps
+`SMARTCAR_CLIENT_SECRET`, `FAKE_FUEL_PERCENT_REMAINING`, and `FAKE_FUEL_RANGE_MILES` to the
+`smartcarClientSecret`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters; leave any
+of them unset to omit the matching setting. `USE_FAKE_FUEL_SERVICE` maps to `useFakeFuelService`
+and defaults to `true` when unset. azd remembers every `azd env set` value per environment, so after
+`azd env set USE_FAKE_FUEL_SERVICE false` later `azd provision` / `azd up` runs keep the live
+provider.
 
 Or with plain `az` (subscription-scoped):
 
@@ -277,6 +303,31 @@ az deployment sub create \
                recipientEmail=you@example.com vehicleId=demo-vehicle \
   --what-if     # drop --what-if to actually deploy
 ```
+
+Production configuration (issue #8), with the Smartcar settings in place but the fake provider
+still selected. The client secret comes from an environment variable, never a literal:
+
+```bash
+az deployment sub create \
+  --location eastus2 \
+  --template-file infra/main.bicep \
+  --parameters environmentName=ffa-prod location=eastus2 \
+               recipientEmail=you@example.com vehicleId=demo-vehicle \
+               smartcarClientId=<client-id> smartcarUserId=<smartcar-user-id> \
+               smartcarClientSecret="$SMARTCAR_CLIENT_SECRET" \
+               useFakeFuelService=true \
+  --what-if     # drop --what-if to actually deploy
+```
+
+The cutover to live Smartcar data is the same command with `useFakeFuelService=false`.
+
+> **Warning:** with plain `az`, `useFakeFuelService` is a command-line parameter and `az` has no
+> memory, so every redeploy must repeat `useFakeFuelService=false`, or the app moves back to the
+> fake provider. Redeploy against your **existing** environment: the same `environmentName` and
+> `location` you provisioned with (a different pair creates a separate resource group and app),
+> plus every parameter you had set, including `smartcarVehicleId` if you pinned one. An omitted
+> optional parameter falls back to its default and its app setting is removed. With `azd`, set
+> `USE_FAKE_FUEL_SERVICE=false` once in the environment instead.
 
 ### Continuous deployment (GitHub Actions)
 
