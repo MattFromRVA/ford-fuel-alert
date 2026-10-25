@@ -362,3 +362,15 @@ gh variable set AZURE_FUNCTION_APP_NAME --body "<function-app-name>"
   `local.settings.sample.json` with placeholder values. Use Key Vault for cloud secrets.
 - **No credential storage / scraping.** Never store Ford account credentials and never scrape FordPass.
 - **Logs never print secrets.** The code logs only whether a credential is configured, never its value.
+- **Reporting a problem.** Security issues go through private vulnerability reporting, not public
+  issues — see [SECURITY.md](SECURITY.md).
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 Matt Chaulklin.
+
+Provided as-is, with no warranty. This is a personal utility rather than a supported product; if you
+deploy your own copy, review the [security notes](#security-notes) and scope your Azure deployment
+identity to your own repository.
