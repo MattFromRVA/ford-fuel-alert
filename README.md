@@ -310,9 +310,9 @@ az ad app federated-credential create --id "$appId" --parameters '{
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
-# Least scope: Contributor on the app's resource group only
-az role assignment create --assignee "$appId" --role Contributor \
-  --scope "/subscriptions/<sub-id>/resourceGroups/<rg-name>"
+# Least scope: Website Contributor on the Function App only (the workflow publishes, never provisions)
+az role assignment create --assignee "$appId" --role "Website Contributor" \
+  --scope "/subscriptions/<sub-id>/resourceGroups/<rg-name>/providers/Microsoft.Web/sites/<function-app-name>"
 
 # Expose the IDs to the workflow as Actions variables
 gh variable set AZURE_CLIENT_ID --body "$appId"
@@ -320,6 +320,10 @@ gh variable set AZURE_TENANT_ID --body "$(az account show --query tenantId -o ts
 gh variable set AZURE_SUBSCRIPTION_ID --body "$(az account show --query id -o tsv)"
 gh variable set AZURE_FUNCTION_APP_NAME --body "<function-app-name>"
 ```
+
+Because the deployment identity is scoped to the Function App, it cannot create or change other
+resources. Run `azd provision` / `azd up` locally with an account that has rights on the resource
+group; the workflow only publishes code.
 
 ### Notes
 
