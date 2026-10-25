@@ -92,7 +92,7 @@ cd src/FordFuelAlert.Functions
 func start
 ```
 
-The timer fires every 2 hours. To trigger it immediately without waiting, call the admin endpoint:
+The timer fires every 2 hours (the `FuelAlertSchedule` value in the sample settings). To trigger it immediately without waiting, call the admin endpoint:
 
 ```bash
 curl -X POST http://localhost:7071/admin/functions/CheckFuelLevelFunction \
@@ -133,6 +133,7 @@ Names use the double-underscore convention that binds to options sections.
 
 | Setting                          | Default          | Purpose                                                        |
 | -------------------------------- | ---------------- | -------------------------------------------------------------- |
+| `FuelAlertSchedule`              | `0 0 */2 * * *`  | NCRONTAB schedule for the fuel check (the sample settings and Bicep set every 2 hours). Required: the function does not load without it. |
 | `FuelAlert__ThresholdPercent`    | `25`             | Send an alert when fuel `% <=` this value.                     |
 | `FuelAlert__ResetPercent`        | `40`             | Clear the alert when fuel `% >=` this value.                   |
 | `FuelAlert__RecipientEmail`      | *(none)*         | Where the alert email is addressed.                            |
@@ -155,6 +156,8 @@ Names use the double-underscore convention that binds to options sections.
 | `Email__AcsEndpoint`             | *(none)*         | `acs` provider: resource endpoint for managed identity (preferred over the connection string in Azure). |
 
 `AzureWebJobsStorage` and `FUNCTIONS_WORKER_RUNTIME` (`dotnet-isolated`) are required by the host.
+`FuelAlertSchedule` is a flat name, not under `FuelAlert__`, because the `%FuelAlertSchedule%` timer
+binding resolves a flat app-setting name.
 
 ---
 
@@ -245,8 +248,8 @@ infra/
 
 ### App settings wired by the template
 
-`APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlert__*`,
-`AlertState__Provider=table` + `AlertState__ServiceUri` + `AlertState__TableName`,
+`APPLICATIONINSIGHTS_CONNECTION_STRING`, `AzureWebJobsStorage__accountName`, `FuelAlertSchedule`,
+`FuelAlert__*`, `AlertState__Provider=table` + `AlertState__ServiceUri` + `AlertState__TableName`,
 `Email__Provider=acs` + `Email__FromAddress`, and a Key Vault reference for
 `Email__AcsConnectionString`.
 
@@ -414,7 +417,7 @@ group; the workflow only publishes code.
    - Set `FuelAlert__UseFakeFuelService=false` (plus the `Smartcar__*` settings) to switch from
      `FakeFuelService` to `SmartcarFuelService`.
 4. Ensure `AzureWebJobsStorage` points at a real storage account.
-5. Adjust the schedule in `CheckFuelLevelFunction` if you want a cadence other than every 2 hours.
+5. Set `FuelAlertSchedule` (NCRONTAB) in App Settings if you want a cadence other than every 2 hours.
 
 ---
 

@@ -43,6 +43,9 @@ param thresholdPercent int = 25
 @description('Fuel percentage at or above which the alert resets.')
 param resetPercent int = 40
 
+@description('NCRONTAB schedule for the fuel check timer.')
+param schedule string = '0 0 */2 * * *'
+
 @description('Recipient email address for alerts.')
 param recipientEmail string
 
@@ -98,6 +101,10 @@ var baseAppSettings = [
   {
     name: 'AzureWebJobsStorage__accountName'
     value: storageAccountName
+  }
+  {
+    name: 'FuelAlertSchedule'
+    value: schedule
   }
   {
     name: 'FuelAlert__ThresholdPercent'

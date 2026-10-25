@@ -16,10 +16,10 @@ public sealed class CheckFuelLevelFunction
         _logger = logger;
     }
 
-    // Runs every 2 hours. To change cadence, edit this NCRONTAB expression (e.g. "0 0 */4 * * *" for every 4 hours),
-    // or bind it to an app setting via [TimerTrigger("%FuelAlertSchedule%")].
+    // Schedule comes from the FuelAlertSchedule app setting (NCRONTAB; every 2 hours in the sample settings and Bicep).
+    // The setting is required: the function does not load without it.
     [Function(nameof(CheckFuelLevelFunction))]
-    public async Task Run([TimerTrigger("0 0 */2 * * *")] TimerInfo timerInfo, CancellationToken cancellationToken)
+    public async Task Run([TimerTrigger("%FuelAlertSchedule%")] TimerInfo timerInfo, CancellationToken cancellationToken)
     {
         _logger.LogInformation("CheckFuelLevelFunction started at {Utc:o}.", DateTimeOffset.UtcNow);
 
