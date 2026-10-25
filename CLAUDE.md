@@ -47,6 +47,7 @@ If the pull/merge introduces conflicts, resolve them before touching ticket work
 - **Do not refactor code outside the scope of your ticket.** File a separate ticket or mention it in the PR description instead.
 - **Do not introduce new abstractions** beyond the three existing interfaces (`IFuelService`, `IEmailService`, `IAlertStateService`) unless the ticket explicitly requires them. No MediatR, AutoMapper, base classes, etc.
 - **Do not add logging frameworks.** The project uses `ILogger<T>` from the worker host; keep it that way.
+- **Do not add comments to code.** No explanatory comments, no XML doc comments, no `#` header blocks in YAML or Bicep. Let naming and structure carry the meaning; if a change needs justification, put it in the PR description. Existing comments stay as they are — do not strip them unless the ticket says to.
 
 ### Security rules (non-negotiable, from README)
 
