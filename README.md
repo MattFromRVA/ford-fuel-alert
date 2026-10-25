@@ -395,6 +395,9 @@ group; the workflow only publishes code.
   .NET 9 Flex runtime. If your region has not yet enabled .NET 10 on Flex Consumption, prefer a
   region that has; otherwise retarget the project to `net9.0` **and** pass
   `--parameters dotnetVersion=9.0` until .NET 10 is available.
+- **`schedule` defaults to `0 0 */2 * * *`** (every 2 hours) and is emitted as the
+  `FuelAlertSchedule` app setting. Pass `--parameters schedule="0 0 */4 * * *"` (or edit the app
+  setting) to change the cadence without a code change.
 - Compile the templates locally with `az bicep build --file infra/main.bicep`.
 
 ---
