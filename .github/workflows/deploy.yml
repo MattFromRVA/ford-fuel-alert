@@ -18,8 +18,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Deploy only when the triggering CI run succeeded (or on manual dispatch).
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Deploy only when CI succeeded for a push to this repo's main (or on manual dispatch).
+    # The branches filter above matches head_branch only, so a fork PR from a branch named
+    # "main" would also trigger this; the event and head_repository checks exclude it.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
 
     steps:
       # For workflow_run events, check out the exact commit CI validated.
