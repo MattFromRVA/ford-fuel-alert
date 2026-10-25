@@ -284,7 +284,10 @@ azd up                    # provision + deploy code
 ```
 
 `FUEL_ALERT_VEHICLE_ID` is the app's own label for the vehicle (used as the alert-state row key),
-while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it.
+while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it. `infra/main.parameters.json` also maps
+`SMARTCAR_CLIENT_SECRET`, `FAKE_FUEL_PERCENT_REMAINING`, and `FAKE_FUEL_RANGE_MILES` to the
+`smartcarClientSecret`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters; leave any
+of them unset to omit the matching setting.
 
 Or with plain `az` (subscription-scoped):
 
