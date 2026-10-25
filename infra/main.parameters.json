@@ -16,6 +16,21 @@
     },
     "smartcarClientSecret": {
       "value": "${SMARTCAR_CLIENT_SECRET}"
+    },
+    "smartcarClientId": {
+      "value": "${SMARTCAR_CLIENT_ID}"
+    },
+    "smartcarUserId": {
+      "value": "${SMARTCAR_USER_ID}"
+    },
+    "smartcarVehicleId": {
+      "value": "${SMARTCAR_VEHICLE_ID}"
+    },
+    "fakeFuelPercentRemaining": {
+      "value": "${FAKE_FUEL_PERCENT_REMAINING}"
+    },
+    "fakeFuelRangeMiles": {
+      "value": "${FAKE_FUEL_RANGE_MILES}"
     }
   }
 }

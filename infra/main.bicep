@@ -36,6 +36,24 @@ param dataLocation string = 'United States'
 @secure()
 param smartcarClientSecret string = ''
 
+@description('Smartcar API client id. Empty = setting omitted.')
+param smartcarClientId string = ''
+
+@description('Smartcar user id of the vehicle owner, returned by Smartcar Connect. Empty = setting omitted.')
+param smartcarUserId string = ''
+
+@description('Smartcar vehicle id. Empty = setting omitted and the provider looks it up from the user\'s single connection.')
+param smartcarVehicleId string = ''
+
+@description('true routes fuel reads to the fake provider; false uses the live Smartcar provider.')
+param useFakeFuelService bool = true
+
+@description('Fake provider fuel percent (0-100). Empty = setting omitted, which the app treats as unavailable data.')
+param fakeFuelPercentRemaining string = ''
+
+@description('Fake provider estimated range in miles. Empty = setting omitted.')
+param fakeFuelRangeMiles string = ''
+
 var abbrs = loadJsonContent('abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 var tags = {
@@ -122,6 +140,12 @@ module functionApp 'modules/functionapp.bicep' = {
     emailSenderAddress: communication.outputs.senderAddress
     acsConnectionStringSecretUri: keyVault.outputs.acsConnectionStringSecretUri
     smartcarClientSecretUri: keyVault.outputs.smartcarClientSecretUri
+    smartcarClientId: smartcarClientId
+    smartcarUserId: smartcarUserId
+    smartcarVehicleId: smartcarVehicleId
+    useFakeFuelService: useFakeFuelService
+    fakeFuelPercentRemaining: fakeFuelPercentRemaining
+    fakeFuelRangeMiles: fakeFuelRangeMiles
   }
 }
 
