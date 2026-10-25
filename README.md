@@ -255,7 +255,9 @@ infra/
 - `Smartcar__ClientId`, `Smartcar__UserId`, `Smartcar__VehicleId`, `FakeFuel__PercentRemaining`,
   and `FakeFuel__RangeMiles` come from the `smartcarClientId`, `smartcarUserId`,
   `smartcarVehicleId`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters and are
-  emitted only when the matching parameter is non-empty.
+  emitted only when the matching parameter is non-empty. `fakeFuelPercentRemaining` and
+  `fakeFuelRangeMiles` must be numeric; the template does not validate them, and a non-numeric
+  value fails at app startup.
 - `Smartcar__ClientSecret` is a Key Vault reference, created only when the secure
   `smartcarClientSecret` parameter is supplied.
 
@@ -276,9 +278,13 @@ azd env set FUEL_ALERT_RECIPIENT_EMAIL you@example.com
 azd env set FUEL_ALERT_VEHICLE_ID demo-vehicle
 azd env set SMARTCAR_CLIENT_ID <client-id>
 azd env set SMARTCAR_USER_ID <smartcar-user-id>
+azd env set SMARTCAR_VEHICLE_ID <smartcar-vehicle-id>   # optional
 azd provision --preview   # what-if
 azd up                    # provision + deploy code
 ```
+
+`FUEL_ALERT_VEHICLE_ID` is the app's own label for the vehicle (used as the alert-state row key),
+while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it.
 
 Or with plain `az` (subscription-scoped):
 
@@ -307,6 +313,12 @@ az deployment sub create \
 ```
 
 The cutover to live Smartcar data is the same command with `useFakeFuelService=false`.
+
+> **Warning:** `useFakeFuelService` is intentionally not in `infra/main.parameters.json`, so a later
+> `azd provision` / `azd up` redeploys the default (`true`) and moves the app back to the fake
+> provider. After a cutover, re-run the `az deployment` command above with
+> `useFakeFuelService=false` (including after any `azd provision` / `azd up`) instead of relying on
+> `azd` alone.
 
 ### Continuous deployment (GitHub Actions)
 
