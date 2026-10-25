@@ -319,9 +319,12 @@ The cutover to live Smartcar data is the same command with `useFakeFuelService=f
 
 > **Warning:** `useFakeFuelService` is intentionally not in `infra/main.parameters.json`, so a later
 > `azd provision` / `azd up` redeploys the default (`true`) and moves the app back to the fake
-> provider. After a cutover, re-run the `az deployment` command above with
-> `useFakeFuelService=false` (including after any `azd provision` / `azd up`) instead of relying on
-> `azd` alone.
+> provider. To cut over, or to restore live reads after any `azd provision` / `azd up`, run
+> `az deployment sub create` against your **existing** environment: the same `environmentName` and
+> `location` you provisioned with (the azd example uses `ffa-dev`; a different pair creates a separate
+> resource group and app), every parameter you had set, including `smartcarVehicleId` if you pinned
+> one, plus `useFakeFuelService=false`. An omitted optional parameter falls back to its default and
+> its app setting is removed.
 
 ### Continuous deployment (GitHub Actions)
 
