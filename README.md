@@ -231,7 +231,7 @@ infra/
 - A **Storage account** (shared-key access disabled) for host storage, the deployment package,
   and the durable alert-state table.
 - **Azure Communication Services + Email** with an Azure-managed domain (`DoNotReply@…`).
-- **Key Vault** (RBAC) holding the ACS connection string and, when supplied, the Smartcar secrets.
+- **Key Vault** (RBAC) holding the ACS connection string and, when supplied, the Smartcar client secret.
 - **Application Insights** (backed by a Log Analytics workspace) for the timer function's logs.
 
 ### Security model
