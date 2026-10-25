@@ -26,6 +26,9 @@
     "smartcarVehicleId": {
       "value": "${SMARTCAR_VEHICLE_ID}"
     },
+    "useFakeFuelService": {
+      "value": "${USE_FAKE_FUEL_SERVICE=true}"
+    },
     "fakeFuelPercentRemaining": {
       "value": "${FAKE_FUEL_PERCENT_REMAINING}"
     },

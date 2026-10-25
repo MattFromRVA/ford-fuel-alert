@@ -279,6 +279,7 @@ azd env set FUEL_ALERT_VEHICLE_ID demo-vehicle
 azd env set SMARTCAR_CLIENT_ID <client-id>
 azd env set SMARTCAR_USER_ID <smartcar-user-id>
 azd env set SMARTCAR_VEHICLE_ID <smartcar-vehicle-id>   # optional
+# azd env set USE_FAKE_FUEL_SERVICE false   # optional cutover: live Smartcar reads
 azd provision --preview   # what-if
 azd up                    # provision + deploy code
 ```
@@ -287,7 +288,10 @@ azd up                    # provision + deploy code
 while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it. `infra/main.parameters.json` also maps
 `SMARTCAR_CLIENT_SECRET`, `FAKE_FUEL_PERCENT_REMAINING`, and `FAKE_FUEL_RANGE_MILES` to the
 `smartcarClientSecret`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters; leave any
-of them unset to omit the matching setting.
+of them unset to omit the matching setting. `USE_FAKE_FUEL_SERVICE` maps to `useFakeFuelService`
+and defaults to `true` when unset. azd remembers every `azd env set` value per environment, so after
+`azd env set USE_FAKE_FUEL_SERVICE false` later `azd provision` / `azd up` runs keep the live
+provider.
 
 Or with plain `az` (subscription-scoped):
 
@@ -317,14 +321,13 @@ az deployment sub create \
 
 The cutover to live Smartcar data is the same command with `useFakeFuelService=false`.
 
-> **Warning:** `useFakeFuelService` is intentionally not in `infra/main.parameters.json`, so a later
-> `azd provision` / `azd up` redeploys the default (`true`) and moves the app back to the fake
-> provider. To cut over, or to restore live reads after any `azd provision` / `azd up`, run
-> `az deployment sub create` against your **existing** environment: the same `environmentName` and
-> `location` you provisioned with (the azd example uses `ffa-dev`; a different pair creates a separate
-> resource group and app), every parameter you had set, including `smartcarVehicleId` if you pinned
-> one, plus `useFakeFuelService=false`. An omitted optional parameter falls back to its default and
-> its app setting is removed.
+> **Warning:** with plain `az`, `useFakeFuelService` is a command-line parameter and `az` has no
+> memory, so every redeploy must repeat `useFakeFuelService=false`, or the app moves back to the
+> fake provider. Redeploy against your **existing** environment: the same `environmentName` and
+> `location` you provisioned with (a different pair creates a separate resource group and app),
+> plus every parameter you had set, including `smartcarVehicleId` if you pinned one. An omitted
+> optional parameter falls back to its default and its app setting is removed. With `azd`, set
+> `USE_FAKE_FUEL_SERVICE=false` once in the environment instead.
 
 ### Continuous deployment (GitHub Actions)
 
