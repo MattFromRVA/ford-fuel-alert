@@ -1,0 +1,14 @@
+# Keeps the GitHub Actions supply chain patched. The workflows pin actions by major
+# tag (actions/checkout@v4, azure/login@v2, ...), which floats within a major version
+# but not across one; Dependabot raises the major bumps as PRs.
+#
+# NuGet is deliberately not watched: the Functions project keeps a minimal, pinned
+# dependency set that is reviewed by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
