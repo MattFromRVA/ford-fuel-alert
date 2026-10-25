@@ -286,14 +286,23 @@ the Function App (it checks out the exact commit CI validated). It can also be r
 Actions tab (`workflow_dispatch`).
 
 Auth is **OIDC federated credentials** — no publish profiles or long-lived secrets in the repo. The
-workflow logs in with `azure/login` using these repository **variables** (identifiers, not secrets):
+workflow logs in with `azure/login` using these repository **secrets**:
 
-| Variable                  | Value                                                        |
-| ------------------------- | ------------------------------------------------------------ |
-| `AZURE_CLIENT_ID`         | App registration used by GitHub Actions                     |
-| `AZURE_TENANT_ID`         | Entra tenant                                                 |
-| `AZURE_SUBSCRIPTION_ID`   | Target subscription                                          |
-| `AZURE_FUNCTION_APP_NAME` | Function App created by the Bicep deployment                 |
+| Secret                  | Value                                   |
+| ----------------------- | --------------------------------------- |
+| `AZURE_CLIENT_ID`       | App registration used by GitHub Actions |
+| `AZURE_TENANT_ID`       | Entra tenant                            |
+| `AZURE_SUBSCRIPTION_ID` | Target subscription                     |
+
+These are identifiers rather than credentials — access is granted by the federated credential, not by
+knowing them — but they are stored as secrets so Actions masks them in run logs, which are world-readable
+on a public repository.
+
+Plus one repository **variable**, which is already public as the app's hostname:
+
+| Variable                  | Value                                        |
+| ------------------------- | -------------------------------------------- |
+| `AZURE_FUNCTION_APP_NAME` | Function App created by the Bicep deployment |
 
 One-time setup (already done for this repo — recorded here so it's reproducible):
 
@@ -314,10 +323,10 @@ az ad app federated-credential create --id "$appId" --parameters '{
 az role assignment create --assignee "$appId" --role "Website Contributor" \
   --scope "/subscriptions/<sub-id>/resourceGroups/<rg-name>/providers/Microsoft.Web/sites/<function-app-name>"
 
-# Expose the IDs to the workflow as Actions variables
-gh variable set AZURE_CLIENT_ID --body "$appId"
-gh variable set AZURE_TENANT_ID --body "$(az account show --query tenantId -o tsv)"
-gh variable set AZURE_SUBSCRIPTION_ID --body "$(az account show --query id -o tsv)"
+# Expose the IDs to the workflow (secrets so they are masked in public run logs)
+gh secret set AZURE_CLIENT_ID --body "$appId"
+gh secret set AZURE_TENANT_ID --body "$(az account show --query tenantId -o tsv)"
+gh secret set AZURE_SUBSCRIPTION_ID --body "$(az account show --query id -o tsv)"
 gh variable set AZURE_FUNCTION_APP_NAME --body "<function-app-name>"
 ```
 
