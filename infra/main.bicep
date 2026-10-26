@@ -20,6 +20,9 @@ param thresholdPercent int = 25
 @description('Fuel percentage at or above which the alert resets.')
 param resetPercent int = 40
 
+@description('NCRONTAB schedule for the fuel check timer.')
+param schedule string = '0 0 */2 * * *'
+
 @description('.NET isolated runtime version for Flex Consumption.')
 param dotnetVersion string = '10.0'
 
@@ -135,6 +138,7 @@ module functionApp 'modules/functionapp.bicep' = {
     instanceMemoryMB: instanceMemoryMB
     thresholdPercent: thresholdPercent
     resetPercent: resetPercent
+    schedule: schedule
     recipientEmail: recipientEmail
     vehicleId: vehicleId
     emailSenderAddress: communication.outputs.senderAddress
