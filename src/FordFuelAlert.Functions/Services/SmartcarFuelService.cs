@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 namespace FordFuelAlert.Functions.Services;
 
 // Real fuel provider backed by the Smartcar Vehicle API v3 (https://smartcar.com/docs), selected when
-// FuelAlert__UseFakeFuelService=false. Per run: get (or reuse) an application token via the client
+// Fuel__Provider=smartcar. Per run: get (or reuse) an application token via the client
 // credentials grant, resolve the vehicle id, then read the fuel-level and range signals on behalf of
 // the vehicle owner (sc-user-id). Every failure path degrades to null (logged warning) so a bad
 // reading never crashes the timer run — the alert logic treats null as "no data".

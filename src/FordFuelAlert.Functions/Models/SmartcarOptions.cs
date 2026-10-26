@@ -1,6 +1,6 @@
 namespace FordFuelAlert.Functions.Models;
 
-// Configuration for the real Smartcar fuel provider (used when FuelAlert__UseFakeFuelService=false).
+// Configuration for the real Smartcar fuel provider (used when Fuel__Provider=smartcar).
 // Targets Smartcar Vehicle API v3: an application-level token from the client credentials grant,
 // plus the vehicle owner's Smartcar user id sent as the sc-user-id header on every vehicle request.
 public sealed class SmartcarOptions

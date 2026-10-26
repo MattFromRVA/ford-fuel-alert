@@ -26,8 +26,20 @@
     "smartcarVehicleId": {
       "value": "${SMARTCAR_VEHICLE_ID}"
     },
-    "useFakeFuelService": {
-      "value": "${USE_FAKE_FUEL_SERVICE=true}"
+    "fuelProvider": {
+      "value": "${FUEL_PROVIDER=fake}"
+    },
+    "fordConnectClientSecret": {
+      "value": "${FORDCONNECT_CLIENT_SECRET}"
+    },
+    "fordConnectRefreshToken": {
+      "value": "${FORDCONNECT_REFRESH_TOKEN}"
+    },
+    "fordConnectClientId": {
+      "value": "${FORDCONNECT_CLIENT_ID}"
+    },
+    "fordConnectVin": {
+      "value": "${FORDCONNECT_VIN}"
     },
     "fakeFuelPercentRemaining": {
       "value": "${FAKE_FUEL_PERCENT_REMAINING}"

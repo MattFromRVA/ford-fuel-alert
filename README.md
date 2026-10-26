@@ -4,9 +4,10 @@ A small personal utility: a timer-triggered Azure Function (.NET isolated worker
 checks a vehicle's fuel level and emails when it gets low.
 
 > **The fake fuel service is the default, but the real providers are implemented.**
-> `SmartcarFuelService` (live Smartcar API), `AcsEmailService` (Azure Communication Services email),
-> and `TableAlertStateService` (Azure Table Storage) all exist and are opt-in via configuration.
-> The fake provider stays the default (`FuelAlert__UseFakeFuelService=true`) until the live E2E cutover.
+> `FordConnectFuelService` (Ford's FordConnect Query API), `SmartcarFuelService` (live Smartcar API),
+> `AcsEmailService` (Azure Communication Services email), and `TableAlertStateService` (Azure Table
+> Storage) all exist and are opt-in via configuration. The fake provider stays the default
+> (`Fuel__Provider=fake`) until the live E2E cutover.
 
 ---
 
@@ -38,7 +39,7 @@ FuelAlertService                  Services/FuelAlertService.cs  (all decision lo
    │            │            │
    │            │            └─ IAlertStateService ─► FileAlertStateService (JSON on disk, dev) / TableAlertStateService (Azure Table Storage)
    │            └─────────────── IEmailService      ─► ConsoleEmailService  (logs the email, dev) / AcsEmailService (Azure Communication Services)
-   └──────────────────────────── IFuelService       ─► FakeFuelService      (config values, default) / SmartcarFuelService (live Smartcar API)
+   └──────────────────────────── IFuelService       ─► FakeFuelService      (config values, default) / FordConnectFuelService (Ford API) / SmartcarFuelService (Smartcar API)
 ```
 
 Everything behind an interface is swappable via dependency injection in `Program.cs`.
@@ -50,11 +51,12 @@ src/FordFuelAlert.Functions/
   Functions/CheckFuelLevelFunction.cs
   Abstractions/               IFuelService, IEmailService, IAlertStateService
   Models/                     FuelStatus, AlertState, EmailMessage, FuelAlertResult, *Options
-  Services/                   FuelAlertService, FakeFuelService, ConsoleEmailService,
-                              AcsEmailService, EmailServiceFactory,
+  Services/                   FuelAlertService, FakeFuelService, FordConnectFuelService,
+                              FordConnectTokenStore, SmartcarFuelService, FuelServiceFactory,
+                              ConsoleEmailService, AcsEmailService, EmailServiceFactory,
                               FileAlertStateService, TableAlertStateService,
-                              AlertStateServiceFactory, SmartcarFuelService
-tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel service
+                              AlertStateServiceFactory
+tests/FordFuelAlert.Tests/    xUnit tests for the alert logic, the providers and the factories
 ```
 
 ---
@@ -64,9 +66,10 @@ tests/FordFuelAlert.Tests/    xUnit tests for the alert logic and the fake fuel 
 Integrating a real vehicle-data provider (Smartcar / official Ford APIs) requires OAuth onboarding,
 vehicle-owner authorization, and live credentials. By starting with a fake provider we can build and
 *prove* the parts that are entirely ours — scheduling, the alert/reset state machine, email
-formatting, persistence, and tests — without waiting on any of that. The real Smartcar provider has
-since been implemented behind that same `IFuelService` interface — with no changes to the alert
-logic — and is enabled by setting `FuelAlert__UseFakeFuelService=false`.
+formatting, persistence, and tests — without waiting on any of that. The real FordConnect Query and
+Smartcar providers have since been implemented behind that same `IFuelService` interface — with no
+changes to the alert logic — and are selected with `Fuel__Provider=fordconnect` or
+`Fuel__Provider=smartcar` (dispatched by `FuelServiceFactory`).
 
 ---
 
@@ -138,7 +141,7 @@ Names use the double-underscore convention that binds to options sections.
 | `FuelAlert__ResetPercent`        | `40`             | Clear the alert when fuel `% >=` this value.                   |
 | `FuelAlert__RecipientEmail`      | *(none)*         | Where the alert email is addressed.                            |
 | `FuelAlert__VehicleId`           | *(none)*         | Identifier for the vehicle being checked.                      |
-| `FuelAlert__UseFakeFuelService`  | `true`           | `true` = fake provider; `false` routes to the real Smartcar provider. |
+| `Fuel__Provider`                 | `fake`           | `fake` = sample data; `smartcar` = Smartcar Vehicle API v3; `fordconnect` = Ford's FordConnect Query API. |
 | `FakeFuel__PercentRemaining`     | *(none)*         | Fake fuel %. Empty = simulate "unavailable".                   |
 | `FakeFuel__RangeMiles`           | *(none)*         | Fake estimated range in miles (optional).                      |
 | `AlertState__Provider`           | `file`           | `file` = local JSON (dev only); `table` = Azure Table Storage. |
@@ -146,10 +149,18 @@ Names use the double-underscore convention that binds to options sections.
 | `AlertState__ConnectionString`   | *(none)*         | `table` provider: storage connection string. **Secret.**       |
 | `AlertState__ServiceUri`         | *(none)*         | `table` provider: table endpoint for managed identity (preferred over the connection string in Azure). |
 | `AlertState__TableName`          | `FuelAlertState` | `table` provider: table name.                                  |
-| `Smartcar__ClientId`             | *(none)*         | Smartcar API client id, from the Dashboard's API Credentials tab (required when `UseFakeFuelService=false`). |
+| `Smartcar__ClientId`             | *(none)*         | Smartcar API client id, from the Dashboard's API Credentials tab (required when `Fuel__Provider=smartcar`). |
 | `Smartcar__ClientSecret`         | *(none)*         | Smartcar API client secret. **Secret.**                        |
 | `Smartcar__UserId`               | *(none)*         | Smartcar user id (UUID) of the vehicle owner, returned as `user_id` on the Connect redirect. Sent as the `sc-user-id` header. Required. |
 | `Smartcar__VehicleId`            | *(none)*         | Smartcar vehicle id — the `{vehicleId}` in `GET /vehicles/{vehicleId}/signals/...`. Optional: when empty, the vehicle is looked up from the user's connection (must be exactly one) and logged so it can be pinned. |
+| `FordConnect__ClientId`          | *(none)*         | OAuth client id of the app registered on developer.ford.com (NA portal). Required when `Fuel__Provider=fordconnect`. |
+| `FordConnect__ClientSecret`      | *(none)*         | OAuth client secret from the same registration; expires on the date shown in the portal (~2 years). **Secret.** |
+| `FordConnect__RefreshToken`      | *(none)*         | Seed refresh token from the one-time owner consent. Used only until the token store holds a rotated token. **Secret.** |
+| `FordConnect__Vin`               | *(none)*         | VIN of the consented vehicle, reported as `FuelStatus.VehicleId`. Optional: when empty it is read once from `GET /garage`. |
+| `FordConnect__MaxDataAgeHours`   | `48`             | Age of the `fuelLevel.updateTime` beyond which a staleness warning is logged. The reading is still used. |
+| `FordConnect__TokenStoreConnectionString` | *(none)* | Table Storage connection string for the rotated refresh token (local Azurite: `UseDevelopmentStorage=true`). **Secret.** |
+| `FordConnect__TokenStoreServiceUri` | *(none)*      | Table endpoint for managed identity (preferred over the connection string in Azure). One of the two is required when `Fuel__Provider=fordconnect`. |
+| `FordConnect__TokenStoreTableName` | `FordConnectTokens` | Table holding the single refresh-token row.                |
 | `Email__Provider`                | `console`        | `console` = logs the email (dev default); `acs` = Azure Communication Services. |
 | `Email__FromAddress`             | *(none)*         | "From" address. For `acs`, a verified sender on your provisioned domain. Required when `Provider=acs`. |
 | `Email__AcsConnectionString`     | *(none)*         | `acs` provider: connection string (endpoint + access key). **Secret.**  |
@@ -179,11 +190,47 @@ range (if available), and the time the reading was taken.
 
 ---
 
+## FordConnect Query (Ford's official API)
+
+`FordConnectFuelService` reads fuel level directly from Ford's
+[FordConnect Query API](https://developer.ford.com) and is selected with `Fuel__Provider=fordconnect`.
+Ford reopened this API for personal use in North America in January 2026 (see Ford's developer
+changelog); registration is free. It is unit-tested with a mocked HTTP handler. Notes for operating it:
+
+- **One-time owner consent (manual).** Register an app on `developer.ford.com/developer-na` as a
+  personal-use app with all data categories, wait for Ford to activate it (hours), then run the OAuth
+  2.0 authorization-code flow in a browser once per vehicle and exchange the code at Ford's token
+  endpoint. Keep the `refresh_token` from that exchange: it seeds `FordConnect__RefreshToken`. The
+  consent page selects one vehicle, so each vehicle needs its own consent and token.
+- **Per run** the provider refreshes the access token at
+  `https://api.vehicle.ford.com/dah2vb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=B2C_1A_FCON_AUTHORIZE`
+  (`grant_type=refresh_token`, cached in memory until it nears expiry), reads
+  `GET https://api.vehicle.ford.com/fcon-query/v1/telemetry` with the bearer token, and reads
+  `GET .../garage` once to learn the VIN when `FordConnect__Vin` is empty.
+- **Durable refresh token.** Ford may rotate the refresh token on every refresh, so the latest one is
+  written to the `FordConnectTokens` table (`FordConnectTokenStore`) together with the consent time
+  from the `id_token`'s `auth_time` claim. The seed in `FordConnect__RefreshToken` is used only when
+  that row does not exist yet.
+- **Annual re-consent.** Ford stops issuing refresh tokens 365 days after the owner's consent, with
+  no exceptions. The provider logs a warning in the last 30 days. When Ford answers `invalid_grant`
+  the run **throws** (visible failure) instead of returning `null` every two hours for the rest of
+  the year: redo the consent and update the seed secret. The client secret also expires (~2 years).
+- **Mapping.** `metrics.fuelLevel.value` is a percentage but Ford reports values above 100 after a
+  fill-up, so it is clamped to 0–100. `metrics.fuelRange.value` is kilometres, converted to miles
+  (km × 0.621371). `RetrievedAtUtc` is the fuel metric's own `updateTime` (falling back to the root
+  `updateTime`, then the clock) because Query returns cloud-cached values that can be older than other
+  metrics; readings older than `FordConnect__MaxDataAgeHours` are still used but logged.
+- Missing or non-numeric `fuelLevel`, HTTP 429/5xx, timeouts, and unparseable responses degrade to
+  "data unavailable" (a logged warning + `null`). Only `invalid_grant` on the token refresh and a
+  missing refresh token throw.
+- Ford's terms license personal, non-public development use with your own vehicles only, and reserve
+  the right to change the API without notice.
+
 ## Smartcar / Ford authorization
 
 `SmartcarFuelService` reads the real vehicle's fuel level via the
 [Smartcar Vehicle API v3](https://smartcar.com/docs/api-reference/vehicles-api-intro) and is selected
-by setting `FuelAlert__UseFakeFuelService=false`. (Smartcar retires API v2.0 on December 1, 2026.)
+by setting `Fuel__Provider=smartcar`. (Smartcar retires API v2.0 on December 1, 2026.)
 It is unit-tested with a mocked HTTP handler. Notes for operating it:
 
 - Use **Smartcar Connect (OAuth)**: the vehicle owner explicitly authorizes access once (requesting
@@ -253,8 +300,13 @@ infra/
 `Email__Provider=acs` + `Email__FromAddress`, and a Key Vault reference for
 `Email__AcsConnectionString`.
 
-- `FuelAlert__UseFakeFuelService` comes from the `useFakeFuelService` parameter (default `true`,
-  the fake provider).
+- `Fuel__Provider` comes from the `fuelProvider` parameter (default `fake`; `smartcar` or
+  `fordconnect` for live reads). `FordConnect__TokenStoreServiceUri` is always set to the storage
+  account's table endpoint (used only by the `fordconnect` provider).
+- `FordConnect__ClientId` and `FordConnect__Vin` come from the `fordConnectClientId` and
+  `fordConnectVin` parameters and are emitted only when non-empty.
+- `FordConnect__ClientSecret` and `FordConnect__RefreshToken` are Key Vault references, created only
+  when the secure `fordConnectClientSecret` / `fordConnectRefreshToken` parameters are supplied.
 - `Smartcar__ClientId`, `Smartcar__UserId`, `Smartcar__VehicleId`, `FakeFuel__PercentRemaining`,
   and `FakeFuel__RangeMiles` come from the `smartcarClientId`, `smartcarUserId`,
   `smartcarVehicleId`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters and are
@@ -282,7 +334,7 @@ azd env set FUEL_ALERT_VEHICLE_ID demo-vehicle
 azd env set SMARTCAR_CLIENT_ID <client-id>
 azd env set SMARTCAR_USER_ID <smartcar-user-id>
 azd env set SMARTCAR_VEHICLE_ID <smartcar-vehicle-id>   # optional
-# azd env set USE_FAKE_FUEL_SERVICE false   # optional cutover: live Smartcar reads
+# azd env set FUEL_PROVIDER fordconnect     # optional cutover: live reads (or smartcar)
 azd provision --preview   # what-if
 azd up                    # provision + deploy code
 ```
@@ -291,9 +343,9 @@ azd up                    # provision + deploy code
 while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it. `infra/main.parameters.json` also maps
 `SMARTCAR_CLIENT_SECRET`, `FAKE_FUEL_PERCENT_REMAINING`, and `FAKE_FUEL_RANGE_MILES` to the
 `smartcarClientSecret`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters; leave any
-of them unset to omit the matching setting. `USE_FAKE_FUEL_SERVICE` maps to `useFakeFuelService`
+of them unset to omit the matching setting. `FUEL_PROVIDER` maps to `fuelProvider`
 and defaults to `true` when unset. azd remembers every `azd env set` value per environment, so after
-`azd env set USE_FAKE_FUEL_SERVICE false` later `azd provision` / `azd up` runs keep the live
+`azd env set FUEL_PROVIDER fordconnect` later `azd provision` / `azd up` runs keep the live
 provider.
 
 Or with plain `az` (subscription-scoped):
@@ -318,19 +370,20 @@ az deployment sub create \
                recipientEmail=you@example.com vehicleId=demo-vehicle \
                smartcarClientId=<client-id> smartcarUserId=<smartcar-user-id> \
                smartcarClientSecret="$SMARTCAR_CLIENT_SECRET" \
-               useFakeFuelService=true \
+               fuelProvider=fake \
   --what-if     # drop --what-if to actually deploy
 ```
 
-The cutover to live Smartcar data is the same command with `useFakeFuelService=false`.
+The cutover to live data is the same command with `fuelProvider=fordconnect` (plus the
+`fordConnect*` parameters) or `fuelProvider=smartcar` (plus the `smartcar*` parameters).
 
-> **Warning:** with plain `az`, `useFakeFuelService` is a command-line parameter and `az` has no
-> memory, so every redeploy must repeat `useFakeFuelService=false`, or the app moves back to the
+> **Warning:** with plain `az`, `fuelProvider` is a command-line parameter and `az` has no
+> memory, so every redeploy must repeat `fuelProvider=fordconnect`, or the app moves back to the
 > fake provider. Redeploy against your **existing** environment: the same `environmentName` and
 > `location` you provisioned with (a different pair creates a separate resource group and app),
 > plus every parameter you had set, including `smartcarVehicleId` if you pinned one. An omitted
 > optional parameter falls back to its default and its app setting is removed. With `azd`, set
-> `USE_FAKE_FUEL_SERVICE=false` once in the environment instead.
+> `FUEL_PROVIDER=fordconnect` once in the environment instead.
 
 ### Continuous deployment (GitHub Actions)
 
@@ -417,8 +470,8 @@ group; the workflow only publishes code.
    - Set `Email__Provider=acs` (with `Email__FromAddress` and either `Email__AcsConnectionString` or
      `Email__AcsEndpoint` + managed identity) so alerts send via Azure Communication Services instead of
      just logging to the console.
-   - Set `FuelAlert__UseFakeFuelService=false` (plus the `Smartcar__*` settings) to switch from
-     `FakeFuelService` to `SmartcarFuelService`.
+   - Set `Fuel__Provider=fordconnect` (plus the `FordConnect__*` settings) or `Fuel__Provider=smartcar`
+     (plus the `Smartcar__*` settings) to switch from `FakeFuelService` to a live provider.
 4. Ensure `AzureWebJobsStorage` points at a real storage account.
 5. Set `FuelAlertSchedule` (NCRONTAB) in App Settings; it is required, and `0 0 */2 * * *` matches the default every-2-hours cadence.
 

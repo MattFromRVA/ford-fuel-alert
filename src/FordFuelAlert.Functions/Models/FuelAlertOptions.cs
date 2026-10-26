@@ -11,6 +11,4 @@ public sealed class FuelAlertOptions
     public string? RecipientEmail { get; set; }
 
     public string? VehicleId { get; set; }
-
-    public bool UseFakeFuelService { get; set; } = true;
 }
