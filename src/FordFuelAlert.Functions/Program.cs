@@ -13,24 +13,35 @@ var host = new HostBuilder()
         var configuration = context.Configuration;
 
         services.Configure<FuelAlertOptions>(configuration.GetSection(FuelAlertOptions.SectionName));
+        services.Configure<FuelOptions>(configuration.GetSection(FuelOptions.SectionName));
         services.Configure<FakeFuelOptions>(configuration.GetSection(FakeFuelOptions.SectionName));
         services.Configure<SmartcarOptions>(configuration.GetSection(SmartcarOptions.SectionName));
+        services.Configure<FordConnectOptions>(configuration.GetSection(FordConnectOptions.SectionName));
         services.Configure<EmailOptions>(configuration.GetSection(EmailOptions.SectionName));
         services.Configure<AlertStateOptions>(configuration.GetSection(AlertStateOptions.SectionName));
 
         services.AddSingleton(TimeProvider.System);
+        services.AddHttpClient();
 
-        // Fuel data provider. Default = fake. Set FuelAlert__UseFakeFuelService=false to route to the real Smartcar provider.
-        var useFakeFuelService = configuration.GetValue($"{FuelAlertOptions.SectionName}:UseFakeFuelService", true);
-        if (useFakeFuelService)
+        // Fuel data provider. Fuel__Provider selects "fake" (default), "smartcar" or "fordconnect".
+        services.AddSingleton<IFuelService>(provider =>
         {
-            services.AddSingleton<IFuelService, FakeFuelService>();
-        }
-        else
-        {
-            services.AddHttpClient();
-            services.AddSingleton<IFuelService, SmartcarFuelService>();
-        }
+            var fuelOptions = configuration.GetSection(FuelOptions.SectionName).Get<FuelOptions>() ?? new FuelOptions();
+            var alertOptions = configuration.GetSection(FuelAlertOptions.SectionName).Get<FuelAlertOptions>() ?? new FuelAlertOptions();
+            var fakeOptions = configuration.GetSection(FakeFuelOptions.SectionName).Get<FakeFuelOptions>() ?? new FakeFuelOptions();
+            var smartcarOptions = configuration.GetSection(SmartcarOptions.SectionName).Get<SmartcarOptions>() ?? new SmartcarOptions();
+            var fordConnectOptions = configuration.GetSection(FordConnectOptions.SectionName).Get<FordConnectOptions>() ?? new FordConnectOptions();
+            return FuelServiceFactory.Create(
+                fuelOptions,
+                alertOptions,
+                fakeOptions,
+                smartcarOptions,
+                fordConnectOptions,
+                new FuelServiceFactory.Dependencies(
+                    provider.GetRequiredService<IHttpClientFactory>(),
+                    provider.GetRequiredService<TimeProvider>(),
+                    provider.GetRequiredService<ILoggerFactory>()));
+        });
 
         // Email provider. Email__Provider selects "console" (logs instead of sending, default) or
         // "acs" (Azure Communication Services). Invalid ACS config throws here on first resolution.

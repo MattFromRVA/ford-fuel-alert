@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # FordFuelAlert
 
-FordFuelAlert is a small personal utility: a timer-triggered Azure Function (.NET 10 isolated worker) that checks a vehicle's fuel level every 2 hours and emails when it gets low. The real Smartcar fuel provider, Azure Communication Services email, and Azure Table Storage state are all implemented, but **the fake fuel service remains the default** (`FuelAlert__UseFakeFuelService=true`) so the Function, alert/reset state machine, email logic, persistence, and tests run locally with sample data. Providers are swappable behind interfaces + DI, selected by configuration.
+FordFuelAlert is a small personal utility: a timer-triggered Azure Function (.NET 10 isolated worker) that checks a vehicle's fuel level every 2 hours and emails when it gets low. The real Smartcar fuel provider, Azure Communication Services email, and Azure Table Storage state are all implemented, but **the fake fuel service remains the default** (`Fuel__Provider=fake`) so the Function, alert/reset state machine, email logic, persistence, and tests run locally with sample data. Providers are swappable behind interfaces + DI, selected by configuration.
 
 Always reference these instructions first and fall back to search or bash commands only when you encounter unexpected information that does not match the info here.
 
@@ -37,8 +37,8 @@ If the pull/merge introduces conflicts, resolve them before touching ticket work
 
 ### The fake provider stays the default — do not change that uninvited
 
-- **`SmartcarFuelService` and `TableAlertStateService` are fully implemented and registered** (selected via `FuelAlert__UseFakeFuelService=false` and `AlertState__Provider=table` respectively). Do not modify them unless the ticket explicitly targets the Smartcar or durable-state integration.
-- **Keep `FuelAlert__UseFakeFuelService=true`** in samples and defaults — local dev and tests run against the fake provider; the Smartcar provider is opted into per deployment.
+- **`SmartcarFuelService` and `TableAlertStateService` are fully implemented and registered** (selected via `Fuel__Provider=smartcar` and `AlertState__Provider=table` respectively), as is `FordConnectFuelService` (`Fuel__Provider=fordconnect`). Do not modify them unless the ticket explicitly targets the Smartcar or durable-state integration.
+- **Keep `Fuel__Provider=fake`** in samples and defaults — local dev and tests run against the fake provider; the Smartcar and FordConnect providers are opted into per deployment.
 - **Do not add graceful degradation or extra fallbacks** to the fuel providers — unavailable fuel data (null percent) already has defined behavior: log a warning, update `LastCheckedUtc`, send nothing.
 
 ### General out-of-scope rules
@@ -76,11 +76,11 @@ Before implementing any behavior, check whether an existing class already owns i
 
 - **Alert/reset decision logic (the whole state machine)** → `Services/FuelAlertService.cs` (`EvaluateAsync`). It is deliberately free of Azure Functions types so it can be unit-tested directly. Do not put threshold comparisons, dedup checks, or reset logic in the Function, an email service, or anywhere else.
 - **The Azure Function is a thin trigger** → `Functions/CheckFuelLevelFunction.cs` only logs start/finish and calls `EvaluateAsync`. Keep it that way. Its `[TimerTrigger]` attribute binds to the `FuelAlertSchedule` app setting via `%FuelAlertSchedule%`; the setting is required and is set to `0 0 */2 * * *` (every 2 hours) in `local.settings.sample.json` and Bicep.
-- **Fuel data retrieval** → implementations of `Abstractions/IFuelService.cs` (`FakeFuelService` by default; `SmartcarFuelService` when `FuelAlert__UseFakeFuelService=false`). Providers map onto `Models/FuelStatus.cs` (`PercentRemaining` 0–100, `RangeMiles`, `RetrievedAtUtc`).
+- **Fuel data retrieval** → implementations of `Abstractions/IFuelService.cs` (`FakeFuelService` by default; `SmartcarFuelService` or `FordConnectFuelService` when `Fuel__Provider` is `smartcar` or `fordconnect`, dispatched by `FuelServiceFactory`). Providers map onto `Models/FuelStatus.cs` (`PercentRemaining` 0–100, `RangeMiles`, `RetrievedAtUtc`).
 - **Email delivery** → implementations of `Abstractions/IEmailService.cs` (`ConsoleEmailService` by default; `AcsEmailService` for Azure Communication Services — selected via `Email__Provider` in `EmailServiceFactory`). Email *content* is built in `FuelAlertService.BuildAlertEmail`, not in the email service.
 - **State persistence** → implementations of `Abstractions/IAlertStateService.cs` (`FileAlertStateService` for local dev; `TableAlertStateService` for Azure Table Storage — selected via `AlertState__Provider` in `AlertStateServiceFactory`). State shape is `Models/AlertState.cs`.
 - **Provider selection and all DI wiring** → `Program.cs`. New swappable implementations get registered there behind the existing interfaces, chosen by configuration.
-- **Configuration** → options classes in `Models/` (`FuelAlertOptions`, `FakeFuelOptions`, `SmartcarOptions`, `EmailOptions`, `AlertStateOptions`), each with a `SectionName` constant, bound in `Program.cs`. Settings use the double-underscore convention (`FuelAlert__ThresholdPercent`). The full settings table lives in `README.md` — keep it updated when adding settings, and add new settings to `local.settings.sample.json` with placeholder values.
+- **Configuration** → options classes in `Models/` (`FuelAlertOptions`, `FuelOptions`, `FakeFuelOptions`, `SmartcarOptions`, `FordConnectOptions`, `EmailOptions`, `AlertStateOptions`), each with a `SectionName` constant, bound in `Program.cs`. Settings use the double-underscore convention (`FuelAlert__ThresholdPercent`). The full settings table lives in `README.md` — keep it updated when adding settings, and add new settings to `local.settings.sample.json` with placeholder values.
 
 ### Behavioral invariants (each exists on purpose — do not "simplify" them away)
 
@@ -105,14 +105,16 @@ src/FordFuelAlert.Functions/
   Abstractions/               IFuelService, IEmailService, IAlertStateService
   Models/                     FuelStatus, AlertState, EmailMessage, FuelAlertResult, *Options
   Services/                   FuelAlertService, FakeFuelService, SmartcarFuelService,
-                              ConsoleEmailService, AcsEmailService, FileAlertStateService,
-                              TableAlertStateService, and the EmailServiceFactory /
-                              AlertStateServiceFactory provider selectors
+                              FordConnectFuelService (+ FordConnectTokenStore), ConsoleEmailService,
+                              AcsEmailService, FileAlertStateService, TableAlertStateService, and
+                              the FuelServiceFactory / EmailServiceFactory / AlertStateServiceFactory
+                              provider selectors
 tests/FordFuelAlert.Tests/
   FuelAlertServiceTests.cs    State-machine coverage (thresholds, dedup, reset, unavailable data)
   FakeFuelServiceTests.cs     Fake provider config parsing
-  SmartcarFuelServiceTests.cs, AcsEmailServiceTests.cs, TableAlertStateServiceTests.cs,
-  EmailServiceFactoryTests.cs, AlertStateServiceFactoryTests.cs
+  SmartcarFuelServiceTests.cs, FordConnectFuelServiceTests.cs, FordConnectTokenStoreTests.cs,
+  AcsEmailServiceTests.cs, TableAlertStateServiceTests.cs,
+  FuelServiceFactoryTests.cs, EmailServiceFactoryTests.cs, AlertStateServiceFactoryTests.cs
                               Real-provider and factory-selection coverage
   Fakes/TestDoubles.cs        StubFuelService, RecordingEmailService, InMemoryAlertStateService
 ```

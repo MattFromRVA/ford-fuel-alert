@@ -48,8 +48,23 @@ param smartcarUserId string = ''
 @description('Smartcar vehicle id. Empty = setting omitted and the provider looks it up from the user\'s single connection.')
 param smartcarVehicleId string = ''
 
-@description('true routes fuel reads to the fake provider; false uses the live Smartcar provider.')
-param useFakeFuelService bool = true
+@description('Fuel data provider: fake (default), smartcar, or fordconnect.')
+@allowed(['fake', 'smartcar', 'fordconnect'])
+param fuelProvider string = 'fake'
+
+@description('FordConnect Query OAuth client secret from developer.ford.com. Empty = secret not created.')
+@secure()
+param fordConnectClientSecret string = ''
+
+@description('FordConnect Query seed refresh token from the one-time owner consent. Empty = secret not created.')
+@secure()
+param fordConnectRefreshToken string = ''
+
+@description('FordConnect Query OAuth client id. Empty = setting omitted.')
+param fordConnectClientId string = ''
+
+@description('VIN of the consented vehicle. Empty = setting omitted and the provider reads it from /garage.')
+param fordConnectVin string = ''
 
 @description('Fake provider fuel percent (0-100). Empty = setting omitted, which the app treats as unavailable data.')
 param fakeFuelPercentRemaining string = ''
@@ -65,6 +80,8 @@ var tags = {
 var deploymentContainerName = 'deployment-package'
 var stateTableName = 'FuelAlertState'
 var createSmartcarClientSecret = !empty(smartcarClientSecret)
+var createFordConnectClientSecret = !empty(fordConnectClientSecret)
+var createFordConnectRefreshToken = !empty(fordConnectRefreshToken)
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: 'rg-${environmentName}'
@@ -116,6 +133,10 @@ module keyVault 'modules/keyvault.bicep' = {
     communicationServiceName: communication.outputs.communicationServiceName
     smartcarClientSecret: smartcarClientSecret
     createSmartcarClientSecret: createSmartcarClientSecret
+    fordConnectClientSecret: fordConnectClientSecret
+    createFordConnectClientSecret: createFordConnectClientSecret
+    fordConnectRefreshToken: fordConnectRefreshToken
+    createFordConnectRefreshToken: createFordConnectRefreshToken
   }
 }
 
@@ -147,7 +168,11 @@ module functionApp 'modules/functionapp.bicep' = {
     smartcarClientId: smartcarClientId
     smartcarUserId: smartcarUserId
     smartcarVehicleId: smartcarVehicleId
-    useFakeFuelService: useFakeFuelService
+    fuelProvider: fuelProvider
+    fordConnectClientSecretUri: keyVault.outputs.fordConnectClientSecretUri
+    fordConnectRefreshTokenUri: keyVault.outputs.fordConnectRefreshTokenUri
+    fordConnectClientId: fordConnectClientId
+    fordConnectVin: fordConnectVin
     fakeFuelPercentRemaining: fakeFuelPercentRemaining
     fakeFuelRangeMiles: fakeFuelRangeMiles
   }

@@ -70,8 +70,20 @@ param smartcarUserId string = ''
 @description('Smartcar vehicle id. Empty = setting omitted and the provider looks it up from the user\'s single connection.')
 param smartcarVehicleId string = ''
 
-@description('true routes fuel reads to the fake provider; false uses the live Smartcar provider.')
-param useFakeFuelService bool = true
+@description('Fuel data provider: fake, smartcar, or fordconnect.')
+param fuelProvider string = 'fake'
+
+@description('Key Vault secret URI for the FordConnect client secret. Empty = omit the setting.')
+param fordConnectClientSecretUri string = ''
+
+@description('Key Vault secret URI for the FordConnect seed refresh token. Empty = omit the setting.')
+param fordConnectRefreshTokenUri string = ''
+
+@description('FordConnect Query OAuth client id. Empty = setting omitted.')
+param fordConnectClientId string = ''
+
+@description('VIN of the consented vehicle. Empty = setting omitted and the provider reads it from /garage.')
+param fordConnectVin string = ''
 
 @description('Fake provider fuel percent (0-100). Empty = setting omitted, which the app treats as unavailable data.')
 param fakeFuelPercentRemaining string = ''
@@ -123,8 +135,12 @@ var baseAppSettings = [
     value: vehicleId
   }
   {
-    name: 'FuelAlert__UseFakeFuelService'
-    value: useFakeFuelService ? 'true' : 'false'
+    name: 'Fuel__Provider'
+    value: fuelProvider
+  }
+  {
+    name: 'FordConnect__TokenStoreServiceUri'
+    value: stateTableEndpoint
   }
   {
     name: 'AlertState__Provider'
@@ -180,6 +196,34 @@ var smartcarVehicleIdSettings = empty(smartcarVehicleId) ? [] : [
   }
 ]
 
+var fordConnectClientSecretSettings = empty(fordConnectClientSecretUri) ? [] : [
+  {
+    name: 'FordConnect__ClientSecret'
+    value: '@Microsoft.KeyVault(SecretUri=${fordConnectClientSecretUri})'
+  }
+]
+
+var fordConnectRefreshTokenSettings = empty(fordConnectRefreshTokenUri) ? [] : [
+  {
+    name: 'FordConnect__RefreshToken'
+    value: '@Microsoft.KeyVault(SecretUri=${fordConnectRefreshTokenUri})'
+  }
+]
+
+var fordConnectClientIdSettings = empty(fordConnectClientId) ? [] : [
+  {
+    name: 'FordConnect__ClientId'
+    value: fordConnectClientId
+  }
+]
+
+var fordConnectVinSettings = empty(fordConnectVin) ? [] : [
+  {
+    name: 'FordConnect__Vin'
+    value: fordConnectVin
+  }
+]
+
 var fakeFuelPercentRemainingSettings = empty(fakeFuelPercentRemaining) ? [] : [
   {
     name: 'FakeFuel__PercentRemaining'
@@ -232,6 +276,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         smartcarClientIdSettings,
         smartcarUserIdSettings,
         smartcarVehicleIdSettings,
+        fordConnectClientSecretSettings,
+        fordConnectRefreshTokenSettings,
+        fordConnectClientIdSettings,
+        fordConnectVinSettings,
         fakeFuelPercentRemainingSettings,
         fakeFuelRangeMilesSettings
       )
