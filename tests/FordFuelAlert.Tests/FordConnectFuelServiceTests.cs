@@ -288,6 +288,61 @@ public class FordConnectFuelServiceTests
         Assert.DoesNotContain(h.Handler.Requests, IsTelemetry);
     }
 
+    private const string InvalidGrantJson = """{"error":"invalid_grant","error_description":"AADB2C90080: The provided grant has expired."}""";
+
+    private static Func<HttpRequestMessage, HttpResponseMessage> RejectRefreshTokens(params string[] rejected) =>
+        request =>
+        {
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return rejected.Any(token => body.Contains($"refresh_token={token}", StringComparison.Ordinal))
+                ? Json(HttpStatusCode.BadRequest, InvalidGrantJson)
+                : Json(HttpStatusCode.OK, TokenJson());
+        };
+
+    [Fact]
+    public async Task Falls_back_to_seed_refresh_token_when_stored_token_is_rejected()
+    {
+        var h = Build(
+            Handler(token: RejectRefreshTokens("refresh-stale")),
+            storedToken: new FordConnectToken { RefreshToken = "refresh-stale", AuthTimeUtc = AuthTime.AddDays(-400) });
+
+        var status = await h.Service.GetFuelStatusAsync();
+
+        Assert.Equal(40d, status!.PercentRemaining);
+        Assert.Equal(2, h.Handler.Requests.Count(IsToken));
+        Assert.Contains("refresh_token=refresh-stale", h.Handler.RequestBodies[0]);
+        Assert.Contains("refresh_token=refresh-seed", h.Handler.RequestBodies[1]);
+        var stored = await h.Store.GetAsync();
+        Assert.Equal("refresh-rotated", stored!.RefreshToken);
+        Assert.Equal(AuthTime, stored.AuthTimeUtc);
+    }
+
+    [Fact]
+    public async Task Throws_when_stored_and_seed_refresh_tokens_are_both_rejected()
+    {
+        var h = Build(
+            Handler(token: RejectRefreshTokens("refresh-stale", "refresh-seed")),
+            storedToken: new FordConnectToken { RefreshToken = "refresh-stale" });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => h.Service.GetFuelStatusAsync());
+
+        Assert.Contains("re-consent", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, h.Handler.Requests.Count(IsToken));
+        Assert.DoesNotContain(h.Handler.Requests, IsTelemetry);
+    }
+
+    [Fact]
+    public async Task Does_not_retry_when_seed_equals_the_rejected_stored_token()
+    {
+        var h = Build(
+            Handler(token: RejectRefreshTokens("refresh-seed")),
+            storedToken: new FordConnectToken { RefreshToken = "refresh-seed" });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Service.GetFuelStatusAsync());
+
+        Assert.Single(h.Handler.Requests, IsToken);
+    }
+
     [Fact]
     public async Task Returns_null_when_token_endpoint_fails_transiently()
     {

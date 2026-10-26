@@ -213,8 +213,11 @@ changelog); registration is free. It is unit-tested with a mocked HTTP handler. 
   that row does not exist yet.
 - **Annual re-consent.** Ford stops issuing refresh tokens 365 days after the owner's consent, with
   no exceptions. The provider logs a warning in the last 30 days. When Ford answers `invalid_grant`
-  the run **throws** (visible failure) instead of returning `null` every two hours for the rest of
-  the year: redo the consent and update the seed secret. The client secret also expires (~2 years).
+  for the stored token, the provider tries the `FordConnect__RefreshToken` seed once (if it differs)
+  and, on success, overwrites the stored row; if the seed is rejected too, the run **throws** (visible
+  failure) instead of returning `null` every two hours for the rest of the year. Recovery is therefore:
+  redo the browser consent, put the new refresh token in the seed secret, and the next run heals
+  itself. The client secret also expires (~2 years).
 - **Mapping.** `metrics.fuelLevel.value` is a percentage but Ford reports values above 100 after a
   fill-up, so it is clamped to 0–100. `metrics.fuelRange.value` is kilometres, converted to miles
   (km × 0.621371). `RetrievedAtUtc` is the fuel metric's own `updateTime` (falling back to the root

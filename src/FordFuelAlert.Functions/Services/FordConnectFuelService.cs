@@ -101,9 +101,20 @@ public sealed class FordConnectFuelService : IFuelService
         }
 
         var stored = await _tokenStore.GetAsync(cancellationToken);
-        var refreshToken = stored?.RefreshToken
-            ?? (string.IsNullOrWhiteSpace(_options.RefreshToken) ? null : _options.RefreshToken);
-        if (refreshToken is null)
+        var seed = string.IsNullOrWhiteSpace(_options.RefreshToken) ? null : _options.RefreshToken;
+
+        var candidates = new List<string>();
+        if (stored is not null)
+        {
+            candidates.Add(stored.RefreshToken);
+        }
+
+        if (seed is not null && !string.Equals(seed, stored?.RefreshToken, StringComparison.Ordinal))
+        {
+            candidates.Add(seed);
+        }
+
+        if (candidates.Count == 0)
         {
             throw new InvalidOperationException(
                 "No FordConnect refresh token is available. Complete the one-time FordConnect consent and set "
@@ -112,6 +123,50 @@ public sealed class FordConnectFuelService : IFuelService
 
         WarnIfConsentExpiring(stored?.AuthTimeUtc, now);
 
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var refreshToken = candidates[i];
+            var result = await RefreshAsync(refreshToken, cancellationToken);
+            if (result.Outcome == RefreshOutcome.Transient)
+            {
+                return null;
+            }
+
+            if (result.Outcome == RefreshOutcome.Rejected)
+            {
+                if (i + 1 < candidates.Count)
+                {
+                    _logger.LogWarning("FordConnect rejected the stored refresh token (invalid_grant); trying the FordConnect__RefreshToken seed.");
+                }
+
+                continue;
+            }
+
+            var token = result.Token!;
+            _accessToken = token.AccessToken;
+            _accessTokenExpiresUtc = now.AddSeconds(Math.Max(0, ParseExpiresIn(token.ExpiresIn) - ExpiryBufferSeconds));
+
+            var usedStoredToken = stored is not null && string.Equals(refreshToken, stored.RefreshToken, StringComparison.Ordinal);
+            await _tokenStore.SaveAsync(
+                new FordConnectToken
+                {
+                    RefreshToken = token.RefreshToken ?? refreshToken,
+                    AuthTimeUtc = ParseAuthTime(token.IdToken) ?? (usedStoredToken ? stored!.AuthTimeUtc : null),
+                    LastRefreshedUtc = now,
+                },
+                cancellationToken);
+
+            return _accessToken;
+        }
+
+        throw new InvalidOperationException(
+            "FordConnect rejected every available refresh token (invalid_grant). Ford requires the owner to re-consent "
+            + "every 365 days; redo the FordConnect consent and set FordConnect__RefreshToken to the new refresh token. "
+            + "The next run tries that seed and replaces the stored token.");
+    }
+
+    private async Task<RefreshResult> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
+    {
         HttpResponseMessage response;
         string body;
         try
@@ -132,12 +187,12 @@ public sealed class FordConnectFuelService : IFuelService
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("FordConnect token refresh timed out; treating fuel data as unavailable.");
-            return null;
+            return RefreshResult.TransientFailure;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
             _logger.LogWarning(ex, "FordConnect token refresh errored; treating fuel data as unavailable.");
-            return null;
+            return RefreshResult.TransientFailure;
         }
 
         using (response)
@@ -147,16 +202,14 @@ public sealed class FordConnectFuelService : IFuelService
                 var error = ReadOAuthError(body);
                 if (string.Equals(error, "invalid_grant", StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new InvalidOperationException(
-                        "FordConnect rejected the refresh token (invalid_grant). Ford requires the owner to re-consent "
-                        + "every 365 days; redo the FordConnect consent and update FordConnect__RefreshToken.");
+                    return RefreshResult.RejectedToken;
                 }
 
                 _logger.LogWarning(
                     "FordConnect token refresh failed with status {StatusCode} (error: {Error}); treating fuel data as unavailable.",
                     (int)response.StatusCode,
                     error ?? "none");
-                return null;
+                return RefreshResult.TransientFailure;
             }
         }
 
@@ -168,28 +221,16 @@ public sealed class FordConnectFuelService : IFuelService
         catch (JsonException ex)
         {
             _logger.LogWarning(ex, "FordConnect token response could not be parsed; treating fuel data as unavailable.");
-            return null;
+            return RefreshResult.TransientFailure;
         }
 
         if (token?.AccessToken is null)
         {
             _logger.LogWarning("FordConnect token response contained no access token; treating fuel data as unavailable.");
-            return null;
+            return RefreshResult.TransientFailure;
         }
 
-        _accessToken = token.AccessToken;
-        _accessTokenExpiresUtc = now.AddSeconds(Math.Max(0, ParseExpiresIn(token.ExpiresIn) - ExpiryBufferSeconds));
-
-        await _tokenStore.SaveAsync(
-            new FordConnectToken
-            {
-                RefreshToken = token.RefreshToken ?? refreshToken,
-                AuthTimeUtc = ParseAuthTime(token.IdToken) ?? stored?.AuthTimeUtc,
-                LastRefreshedUtc = now,
-            },
-            cancellationToken);
-
-        return _accessToken;
+        return new RefreshResult(RefreshOutcome.Success, token);
     }
 
     private async Task<string?> GetVinAsync(string accessToken, CancellationToken cancellationToken)
@@ -419,4 +460,17 @@ public sealed class FordConnectFuelService : IFuelService
     }
 
     private sealed record Metric(double? Value, DateTimeOffset? UpdateTime);
+
+    private enum RefreshOutcome
+    {
+        Success,
+        Rejected,
+        Transient,
+    }
+
+    private sealed record RefreshResult(RefreshOutcome Outcome, TokenResponse? Token)
+    {
+        public static readonly RefreshResult RejectedToken = new(RefreshOutcome.Rejected, null);
+        public static readonly RefreshResult TransientFailure = new(RefreshOutcome.Transient, null);
+    }
 }
