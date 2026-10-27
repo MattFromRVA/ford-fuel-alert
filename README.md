@@ -198,10 +198,12 @@ Ford reopened this API for personal use in North America in January 2026 (see Fo
 changelog); registration is free. It is unit-tested with a mocked HTTP handler. Notes for operating it:
 
 - **One-time owner consent (manual).** Register an app on `developer.ford.com/developer-na` as a
-  personal-use app with all data categories, wait for Ford to activate it (hours), then run the OAuth
-  2.0 authorization-code flow in a browser once per vehicle and exchange the code at Ford's token
-  endpoint. Keep the `refresh_token` from that exchange: it seeds `FordConnect__RefreshToken`. The
-  consent page selects one vehicle, so each vehicle needs its own consent and token.
+  personal-use app with the `Vehicle Data` category, wait for Ford to activate it (hours), then run
+  the OAuth 2.0 authorization-code flow in a browser once per vehicle and exchange the code at
+  Ford's token endpoint. Keep the `refresh_token` from that exchange: it seeds
+  `FordConnect__RefreshToken`. The consent page selects one vehicle, so each vehicle needs its own
+  consent and token. Step-by-step instructions are in
+  [Registering your own FordConnect app](#registering-your-own-fordconnect-app).
 - **Per run** the provider refreshes the access token at
   `https://api.vehicle.ford.com/dah2vb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=B2C_1A_FCON_AUTHORIZE`
   (`grant_type=refresh_token`, cached in memory until it nears expiry), reads
@@ -228,6 +230,89 @@ changelog); registration is free. It is unit-tested with a mocked HTTP handler. 
   missing refresh token throw.
 - Ford's terms license personal, non-public development use with your own vehicles only, and reserve
   the right to change the API without notice.
+
+### Registering your own FordConnect app
+
+All of the following is manual and happens once per deployment. None of it can be scripted: Ford
+gates registration behind a signed-in portal and the consent behind a browser login.
+
+**1. Create a Ford developer account** at [developer.ford.com](https://developer.ford.com) and accept
+the Developer Marketplace T&C. The dialog's "I agree" button stays `disabled` until all three policy
+links inside it have been opened — opening them is what enables it, and reloading the page resets it.
+
+**2. Register the application** at `developer.ford.com/developer-na`:
+
+| Field | Value |
+| --- | --- |
+| Is this app for personal use? | Yes (locked on for personal accounts) |
+| Application Name | anything, e.g. `Fuel Alert` |
+| Application Description | free text, max 500 characters |
+| Purpose of Usage | free text, **max 100 characters** |
+| Which device does your application service? | `Gas Vehicles` for an ICE or hybrid Ford |
+| Allowed Redirect URI(s) | `http://localhost` |
+
+Neither length limit is shown in the portal and neither text field accepts apostrophes. An over-long
+or apostrophed value simply leaves "Continue" disabled with no message explaining why.
+
+The redirect URI is used only by the one-time consent in step 4 and never by the Function, which
+authenticates with `grant_type=refresh_token` and sends no redirect URI at all. It must not carry a
+port — `http://localhost:8080` is rejected at registration — and nothing needs to listen on it: the
+browser is redirected to an unreachable address and the authorization code is read from the address
+bar.
+
+**3. Select the data categories.** `Vehicle Basic Info` is mandatory and supplies the VIN that
+`GET /garage` returns. Add **`Vehicle Data`** and nothing else: Ford's
+[data dictionary](https://developer.ford.com/fordconnect-data-dictionary) lists `FUEL_LEVEL` and
+`FUEL_RANGE` under that category alone. `Trip Data` is a decoy — it holds `TRIP_FUEL_CONSUMED` and
+`TRIP_FUEL_ECONOMY`, which are per-journey totals rather than tank level.
+
+Submit, then generate a credential to obtain the Client ID and Secret. Ford needs **at least two
+hours** to deploy the app globally; running the consent before that completes fails at the Consent
+button.
+
+**4. Run the one-time owner consent.** The consent page selects a single vehicle, so repeat this per
+vehicle. Open this URL in a browser, substituting your client id:
+
+```
+https://api.vehicle.ford.com/fcon-public/v1/auth/init?client_id=CLIENT_ID&response_type=code&redirect_uri=http://localhost&scope=openid%20offline_access&state=xyz123
+```
+
+Sign in as the vehicle's primary owner, select the vehicle, scroll to the bottom and press Consent.
+The browser then fails to load `http://localhost/?code=...` — that is expected. Copy the `code`
+value out of the address bar.
+
+**5. Exchange the code for a refresh token** (the code is single-use and expires in minutes).
+`--data-urlencode` is required rather than plain `-d`, which performs no form encoding: a client
+secret or code containing `+`, `&` or `%` would otherwise reach Ford altered and be rejected.
+
+```bash
+curl -s -X POST "https://api.vehicle.ford.com/dah2vb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=B2C_1A_FCON_AUTHORIZE" \
+  --data-urlencode grant_type=authorization_code \
+  --data-urlencode client_id="$FORDCONNECT_CLIENT_ID" \
+  --data-urlencode client_secret="$FORDCONNECT_CLIENT_SECRET" \
+  --data-urlencode redirect_uri=http://localhost \
+  --data-urlencode code="$FORDCONNECT_AUTH_CODE"
+```
+
+Keep `refresh_token` from the response — that is `FordConnect__RefreshToken`. The `id_token`'s
+`auth_time` claim starts the 365-day re-consent clock; calendar it alongside the client secret's
+expiry date shown in the portal.
+
+**6. Configure the app.** Locally, put the values in `local.settings.json` (gitignored) and set
+`Fuel__Provider=fordconnect`. For Azure the two secrets must never be committed — they reach Key
+Vault through environment variables consumed by `infra/main.parameters.json`:
+
+```bash
+azd env set FORDCONNECT_CLIENT_ID <client id>
+azd env set FORDCONNECT_CLIENT_SECRET <client secret>
+azd env set FORDCONNECT_REFRESH_TOKEN <refresh token>
+azd env set FORDCONNECT_VIN <vin>
+azd env set FUEL_PROVIDER fordconnect
+```
+
+`FORDCONNECT_VIN` is optional; when empty the VIN is read once from `GET /garage`. Only the client
+secret and refresh token become Key Vault secrets (`fordconnect-client-secret`,
+`fordconnect-refresh-token`); the client id and VIN are plain app settings.
 
 ## Smartcar / Ford authorization
 
