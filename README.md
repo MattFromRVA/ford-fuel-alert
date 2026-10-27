@@ -353,8 +353,16 @@ both are resolved by waiting rather than by changing anything here.
 
 On the next consent, capture the full redirect chain with "preserve log" enabled. The second
 authorize request — to `dah2vb2cprod.b2clogin.com/.../oauth2/v2.0/authorize` — shows the
-`redirect_uri`, `scope` and any `code_challenge` that the exchange has to mirror. Keep the full error
-body too: the `Correlation ID` in `error_description` is what Ford developer support needs.
+`redirect_uri` and `scope` that the exchange has to mirror, and whether PKCE is in play.
+
+A `code_challenge` on that leg cannot be copied into the exchange: the token request requires the
+original `code_verifier`, which for `S256` cannot be derived from the challenge and is held only by
+whatever started that authorize request — Ford's wrapper, not us. Finding one there would therefore
+mean the code is not redeemable outside Ford's own callback at all, which is a diagnosis rather than
+a fix.
+
+Keep the full error body too: the `Correlation ID` in `error_description` is what Ford developer
+support needs.
 
 ## Smartcar / Ford authorization
 
