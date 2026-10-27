@@ -281,15 +281,17 @@ Sign in as the vehicle's primary owner, select the vehicle, scroll to the bottom
 The browser then fails to load `http://localhost/?code=...` — that is expected. Copy the `code`
 value out of the address bar.
 
-**5. Exchange the code for a refresh token** (the code is single-use and expires in minutes):
+**5. Exchange the code for a refresh token** (the code is single-use and expires in minutes).
+`--data-urlencode` is required rather than plain `-d`, which performs no form encoding: a client
+secret or code containing `+`, `&` or `%` would otherwise reach Ford altered and be rejected.
 
 ```bash
 curl -s -X POST "https://api.vehicle.ford.com/dah2vb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=B2C_1A_FCON_AUTHORIZE" \
-  -d grant_type=authorization_code \
-  -d client_id="$FORDCONNECT_CLIENT_ID" \
-  -d client_secret="$FORDCONNECT_CLIENT_SECRET" \
-  -d redirect_uri=http://localhost \
-  -d code="$FORDCONNECT_AUTH_CODE"
+  --data-urlencode grant_type=authorization_code \
+  --data-urlencode client_id="$FORDCONNECT_CLIENT_ID" \
+  --data-urlencode client_secret="$FORDCONNECT_CLIENT_SECRET" \
+  --data-urlencode redirect_uri=http://localhost \
+  --data-urlencode code="$FORDCONNECT_AUTH_CODE"
 ```
 
 Keep `refresh_token` from the response — that is `FordConnect__RefreshToken`. The `id_token`'s
