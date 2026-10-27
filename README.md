@@ -314,6 +314,48 @@ azd env set FUEL_PROVIDER fordconnect
 secret and refresh token become Key Vault secrets (`fordconnect-client-secret`,
 `fordconnect-refresh-token`); the client id and VIN are plain app settings.
 
+### Troubleshooting the consent and the exchange
+
+**The consent URL's `scope` is ignored.** `auth/init` discards whatever scope is passed and always
+sends `<ford-client-id> openid` to `login.ford.com`. It is kept in the URL above only because the
+community integrations send it. Nothing about scope at the authorize step can affect the outcome.
+
+**A successful consent does not prove the registration is correct.** `auth/init` checks only that the
+client id exists in Ford's API-gateway registry; probes confirm it accepts an unregistered
+`redirect_uri` and a `response_type` of `token` and still issues a 302. A code therefore proves the
+credential record exists and that you are a valid vehicle owner — not that the client secret, the
+registered redirect URI, or the app's provisioning in the `dah2vb2cprod` B2C tenant are right.
+
+**Two B2C tenants are involved.** Consent runs on `login.ford.com` (tenant `4566605f-…`); redemption
+runs on `dah2vb2cprod`, whose issuer is `914d88b1-…`. The canonical token endpoint, from that
+tenant's `.well-known/openid-configuration`, is
+`https://dah2vb2cprod.b2clogin.com/dah2vb2cprod.onmicrosoft.com/b2c_1a_fcon_authorize/oauth2/v2.0/token`.
+The `api.vehicle.ford.com/dah2vb2cprod.onmicrosoft.com/oauth2/v2.0/token?p=B2C_1A_FCON_AUTHORIZE`
+URL used by `FordConnectFuelService` and by the community integrations is a proxy in front of it and
+returns byte-identical responses.
+
+**`invalid_grant` / `AADB2C90085` on the code exchange.** Ford returns this generic "internal error"
+for several unrelated causes, so it carries little information on its own. Confirmed by testing:
+
+- Failed redemptions do **not** consume the authorization code, so every variant can be batched onto
+  one code rather than spending a consent per attempt.
+- The error is unchanged across `redirect_uri=http://localhost`, the `fma-callback` URL, with and
+  without `scope` — so a uniform error does not imply the parameters are correct.
+- A junk-`refresh_token` probe cannot test the client secret: omitting the secret, sending it in the
+  body and sending it as HTTP Basic all return the same `AADB2C90090`, because the refresh token is
+  parsed before client authentication.
+
+The two recorded occurrences of this error against this endpoint in the community trackers were both
+credential problems, resolved by deleting the OAuth credential in the portal and generating a new
+one. Try that first. If it persists, the remaining candidates are the app not yet being provisioned
+in the B2C tenant (registration can take days, not the advertised two hours) and a Ford-side fault;
+both are resolved by waiting rather than by changing anything here.
+
+On the next consent, capture the full redirect chain with "preserve log" enabled. The second
+authorize request — to `dah2vb2cprod.b2clogin.com/.../oauth2/v2.0/authorize` — shows the
+`redirect_uri`, `scope` and any `code_challenge` that the exchange has to mirror. Keep the full error
+body too: the `Correlation ID` in `error_description` is what Ford developer support needs.
+
 ## Smartcar / Ford authorization
 
 `SmartcarFuelService` reads the real vehicle's fuel level via the
