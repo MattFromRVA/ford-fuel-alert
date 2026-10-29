@@ -14,14 +14,9 @@ jobs:
     if: github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
 
     steps:
-      - name: Fetch Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@v3
-
-      - name: Enable auto-merge for minor and patch updates
-        if: >-
-          steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-patch'
+      # Covers major, minor and patch updates. The required build-and-test
+      # check still has to pass before GitHub merges anything.
+      - name: Enable auto-merge
         run: gh pr merge --auto --merge "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
