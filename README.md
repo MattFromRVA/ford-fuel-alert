@@ -1,30 +1,319 @@
 # ford-fuel-alert
 
-A small personal utility: a timer-triggered Azure Function (.NET isolated worker) that periodically
-checks a vehicle's fuel level and emails when it gets low.
+Get an email when your Ford is low on fuel. This is a small Azure Function (.NET 10 isolated worker)
+that checks a vehicle's fuel level every 2 hours and emails you once when it drops to 25%, then stays
+quiet until you fill up.
 
-> **The fake fuel service is the default, but the real providers are implemented.**
-> `FordConnectFuelService` (Ford's FordConnect Query API), `SmartcarFuelService` (live Smartcar API),
-> `AcsEmailService` (Azure Communication Services email), and `TableAlertStateService` (Azure Table
-> Storage) all exist and are opt-in via configuration. The fake provider stays the default
-> (`Fuel__Provider=fake`) until the live E2E cutover.
+> [!WARNING]
+> **It cannot read a real Ford yet.** Neither route to live vehicle data has succeeded so far. You can
+> still install it and test the whole flow with simulated fuel readings today.
+> See [Project status](#project-status).
+
+**Contents:** [Project status](#project-status) · [What you need](#what-you-need) ·
+[Installation guide](#installation-guide) · [Running it day to day](#running-it-day-to-day) ·
+[Reference](#reference) · [License](#license)
+
+---
+
+## Project status
+
+*Last updated November 2, 2026.*
+
+| Part | Status | Evidence |
+| --- | --- | --- |
+| Alert logic, simulated fuel provider, automated tests | ✅ Working | Unit tests pass in CI |
+| Azure infrastructure and the 2-hour timer | ✅ Working | Runs on schedule in a live Azure deployment |
+| Deploying code from GitHub Actions | ✅ Working | Live deployments run automatically from `main` |
+| Saved alert state and email settings in Azure | ✅ Configured | Key Vault reference resolves; runs are healthy |
+| Real email delivered from Azure | ⚠️ Not yet confirmed | Tracked in [#9](https://github.com/MattFromRVA/ford-fuel-alert/issues/9) |
+| Live fuel data through FordConnect | ❌ Blocked | Code is written and tested against mocked responses; see below |
+| Live fuel data through Smartcar | ❌ Blocked | Code is written and tested against mocked responses; see below |
+
+### What is blocking live data
+
+**FordConnect, Ford's own API, is the recommended route.** Registering the app and approving access in
+the browser both work, but Ford's token endpoint rejects every attempt to redeem the resulting
+authorization code. It returns a generic `AADB2C90085` "internal error", so no refresh token can be
+obtained.
+
+The cause isn't confirmed. The evidence points away from this code, and a Ford-side fault is possible,
+but a bad credential or an app Ford hasn't finished provisioning haven't been ruled out. Regenerating
+the credential is the next thing to try. Details are in
+[#35](https://github.com/MattFromRVA/ford-fuel-alert/issues/35), with another look planned around
+January 2027.
+
+**Smartcar is the fallback.** A July web-login outage at Ford is marked resolved and Smartcar lists
+Ford as operational, but the most recent attempt (October 25, 2026) still failed at the "Log in with
+Ford" step. Smartcar's login page also warns that Ford may flag the connection as suspicious and reset
+your Ford password, so retrying repeatedly isn't advisable. Details are in
+[#5](https://github.com/MattFromRVA/ford-fuel-alert/issues/5).
+
+**If you try this before it's resolved,** your account or vehicle may behave differently. If you get a
+refresh token from FordConnect, please say so on
+[#35](https://github.com/MattFromRVA/ford-fuel-alert/issues/35). The alternatives that were evaluated,
+including OBD dongles, are compared in
+[this report](reports/Ford%20fuel%20level%20data%20source%20options.md).
 
 ---
 
 ## What it does
 
-On a schedule (every 2 hours by default), the function:
+Every 2 hours, the function:
 
-1. Reads the current fuel status from an `IFuelService` (the **fake** provider by default).
-2. If fuel `% <= threshold` (default **25%**) **and** no alert has been sent yet → sends a "Ford fuel is low" email and records that an alert was sent.
-3. Suppresses repeat emails while the alert is active (no duplicate spam every run).
-4. Resets the alert once fuel rises back to `% >= reset` (default **40%**), so the next low reading can alert again.
-5. Persists state between runs (alert sent flag, timestamps, last known % / range).
+1. Reads the current fuel level.
+2. Sends a "Ford fuel is low" email if fuel is at or below **25%** and no alert is active.
+3. Sends nothing further while the alert is active, so you get one email rather than one every 2 hours.
+4. Re-arms once fuel is back to at least **40%**, so the next low tank alerts again.
+5. Saves its state between runs.
 
-All decision logic lives in `FuelAlertService` (free of any Functions types) so it is easy to unit-test.
-The Azure Function itself is a thin trigger.
+Both percentages are configurable.
 
 ---
+
+## What you need
+
+| To... | You need |
+| --- | --- |
+| Try it locally with simulated fuel | [.NET 10 SDK](https://dotnet.microsoft.com/download), [Azure Functions Core Tools v4](https://learn.microsoft.com/azure/azure-functions/functions-run-local), [Azurite](https://learn.microsoft.com/azure/storage/common/storage-use-azurite) |
+| Run it in Azure | An Azure subscription and the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli). Your account must be able to assign roles, for example **Owner** on the subscription, because the template grants the app its own permissions. |
+| Read a real vehicle | A Ford you own with an active FordPass connection, plus your own FordConnect or Smartcar developer registration. **[Currently blocked.](#what-is-blocking-live-data)** |
+
+**Cost.** Azure charges for the Function App, storage, logs and email by usage. A check every 2 hours
+is light, but use the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) to
+estimate your own bill, and set a budget alert if you want a hard signal. FordConnect registration is
+free. See [Smartcar's pricing](https://smartcar.com/pricing) for its current plans.
+
+---
+
+## Installation guide
+
+Do these in order. Each step proves something works before you depend on it, so you can stop after
+Step 3 and still have the complete system running on simulated fuel.
+
+### Step 1: Run it locally
+
+Install the tools (or see the links above for other install methods):
+
+```bash
+npm install -g azure-functions-core-tools@4 azurite
+```
+
+Get the code. Fork the repository first if you plan to [deploy from GitHub Actions](#step-6-optional-deploy-automatically-from-github):
+
+```bash
+git clone https://github.com/MattFromRVA/ford-fuel-alert.git
+```
+
+```bash
+cd ford-fuel-alert
+```
+
+Confirm it builds and the tests pass:
+
+```bash
+dotnet test
+```
+
+Create your local settings. This file is gitignored, so your values stay on your machine:
+
+```bash
+cp src/FordFuelAlert.Functions/local.settings.sample.json src/FordFuelAlert.Functions/local.settings.json
+```
+
+Start the storage emulator in a separate terminal, from the repository root:
+
+```bash
+azurite --silent --location ./.azurite
+```
+
+Start the function in a second terminal, also from the repository root:
+
+```bash
+cd src/FordFuelAlert.Functions && func start
+```
+
+The timer would normally wait for its next 2-hour slot, so trigger it now from a third terminal:
+
+```bash
+curl -X POST http://localhost:7071/admin/functions/CheckFuelLevelFunction -H "Content-Type: application/json" -d '{"input":""}'
+```
+
+**You should see** `[FAKE EMAIL]` and `Low-fuel alert sent` in the `func start` terminal, because the
+sample settings simulate 20% fuel against a 25% threshold. No real email is sent locally. Trigger it
+again and the log says `No action` instead, which shows the duplicate suppression working.
+
+To try other scenarios, see [Experimenting with simulated fuel](#experimenting-with-simulated-fuel).
+
+### Step 2: Create the Azure resources
+
+Run the commands in Steps 2, 3 and 5 from the repository root, in one terminal, so the values you set
+carry through. Sign in and pick the subscription to use:
+
+```bash
+az login
+```
+
+Set your values for this terminal session. `ENV_NAME` determines the resource group name
+(`rg-<ENV_NAME>`). `VEHICLE_LABEL` is your own name for the vehicle, not a Ford or Smartcar id:
+
+```bash
+export ENV_NAME=ffa-prod LOCATION=eastus2 RECIPIENT=you@example.com VEHICLE_LABEL=my-ford
+```
+
+Preview what will be created:
+
+```bash
+az deployment sub create --location "$LOCATION" --template-file infra/main.bicep --parameters environmentName="$ENV_NAME" location="$LOCATION" recipientEmail="$RECIPIENT" vehicleId="$VEHICLE_LABEL" fakeFuelPercentRemaining=20 --what-if
+```
+
+Run the same command without `--what-if` to create everything:
+
+```bash
+az deployment sub create --location "$LOCATION" --template-file infra/main.bicep --parameters environmentName="$ENV_NAME" location="$LOCATION" recipientEmail="$RECIPIENT" vehicleId="$VEHICLE_LABEL" fakeFuelPercentRemaining=20
+```
+
+This creates a Function App, storage, Key Vault, Application Insights and an email service with an
+Azure-managed sender domain, with the simulated fuel provider selected. See
+[Infrastructure](#infrastructure-bicep--azd) for the details. If you prefer `azd`, see
+[Deploying with azd](#deploying-with-azd).
+
+> [!IMPORTANT]
+> **Each deployment replaces all of the app's settings.** Repeat every parameter you've set whenever
+> you redeploy, and keep the same `environmentName` and `location`. Anything you leave out reverts to
+> its default, and that includes `fuelProvider`, which would quietly put you back on simulated fuel.
+
+### Step 3: Publish the code and test real email
+
+Look up your Function App's name and address:
+
+```bash
+export APP_NAME=$(az functionapp list -g "rg-$ENV_NAME" --query "[0].name" -o tsv)
+```
+
+```bash
+export APP_HOST=$(az functionapp show -g "rg-$ENV_NAME" -n "$APP_NAME" --query defaultHostName -o tsv)
+```
+
+Publish the code:
+
+```bash
+(cd src/FordFuelAlert.Functions && func azure functionapp publish "$APP_NAME")
+```
+
+Trigger a run. This retrieves the app's master key, so don't paste the command's output anywhere:
+
+```bash
+curl -X POST "https://$APP_HOST/admin/functions/CheckFuelLevelFunction" -H "x-functions-key: $(az functionapp keys list -g "rg-$ENV_NAME" -n "$APP_NAME" --query masterKey -o tsv)" -H "Content-Type: application/json" -d '{"input":""}'
+```
+
+**You should see** a "Ford fuel is low" email at your recipient address, sent from a `DoNotReply@`
+Azure address. Check your spam folder, and allow a minute or two. Trigger it again and no second email
+should arrive. If nothing comes through, check the function's logs in Application Insights.
+
+Once this works, your installation is complete apart from the live fuel source. Leave
+`fakeFuelPercentRemaining` out of later deployments so simulated fuel can't send you alerts: with the
+value unset, each run logs "data unavailable" and sends nothing.
+
+### Step 4: Connect your vehicle
+
+> [!WARNING]
+> **This step currently fails for both providers.** See [What is blocking live data](#what-is-blocking-live-data)
+> before spending time on it.
+
+Pick one provider. Each person needs their own developer registration, and you must be the vehicle's
+owner, using the provider's official sign-in. Don't give this app your Ford password.
+
+- **[FordConnect](#fordconnect-query-fords-official-api)** (recommended): free, direct from Ford, North
+  America only. Follow [Registering your own FordConnect app](#registering-your-own-fordconnect-app) to
+  get a client id, client secret and refresh token. Access must be re-approved
+  [every 365 days](#running-it-day-to-day).
+- **[Smartcar](#smartcar)**: a third-party service. Create an application in the Smartcar dashboard and
+  run Smartcar Connect with the `read_fuel` permission to get a client id, client secret and user id.
+  Check first that Smartcar reports fuel level for your model.
+
+### Step 5: Switch to live data
+
+Put the secrets in environment variables rather than typing them into the command, then redeploy.
+
+For FordConnect:
+
+```bash
+az deployment sub create --location "$LOCATION" --template-file infra/main.bicep --parameters environmentName="$ENV_NAME" location="$LOCATION" recipientEmail="$RECIPIENT" vehicleId="$VEHICLE_LABEL" fuelProvider=fordconnect fordConnectClientId="$FORDCONNECT_CLIENT_ID" fordConnectClientSecret="$FORDCONNECT_CLIENT_SECRET" fordConnectRefreshToken="$FORDCONNECT_REFRESH_TOKEN"
+```
+
+For Smartcar:
+
+```bash
+az deployment sub create --location "$LOCATION" --template-file infra/main.bicep --parameters environmentName="$ENV_NAME" location="$LOCATION" recipientEmail="$RECIPIENT" vehicleId="$VEHICLE_LABEL" fuelProvider=smartcar smartcarClientId="$SMARTCAR_CLIENT_ID" smartcarClientSecret="$SMARTCAR_CLIENT_SECRET" smartcarUserId="$SMARTCAR_USER_ID"
+```
+
+The secrets go into Key Vault, and the app reads them from there.
+
+Then confirm it by triggering a run with the Step 3 command, and checking Application Insights for the
+fuel reading. Trigger a second run too: if it also succeeds, tokens are being saved correctly. If the
+tank is above 25%, you can force one real email by temporarily redeploying with
+`thresholdPercent=100`, then redeploying without it.
+
+### Step 6 (optional): Deploy automatically from GitHub
+
+Your fork can publish new code to your Function App whenever `main` changes, by following
+[Continuous deployment](#continuous-deployment-github-actions). Until you add the Azure secrets it
+describes, the Deploy workflow fails at the Azure login step in your fork.
+
+---
+
+## Running it day to day
+
+**Dates to put in your calendar (FordConnect only):**
+
+| What expires | When | What to do |
+| --- | --- | --- |
+| Owner consent | 365 days after you approve access; Ford makes no exceptions | Repeat the [consent and exchange](#registering-your-own-fordconnect-app), then redeploy with the new `fordConnectRefreshToken`. The next run recovers on its own. |
+| Client secret | About 2 years; the portal shows the date | Generate a new credential, then redeploy with the new `fordConnectClientSecret`. |
+
+The app logs a warning during the last 30 days of the consent period. After it expires, runs fail
+visibly rather than silently reporting no data.
+
+**Changing settings.** Redeploy with the changed parameter, such as `thresholdPercent=20`,
+`resetPercent=50` or `schedule="0 0 */4 * * *"`, along with every other parameter you've set. Settings
+added by hand in the Azure portal are removed by the next deployment.
+
+**Checking on it.** Logs and run history are in the Application Insights resource (`appi-*`) in your
+resource group.
+
+**Staying updated.** Pull the latest code, then publish it as in Step 3, or let
+[GitHub Actions](#continuous-deployment-github-actions) do it. Publishing code doesn't apply
+infrastructure changes, so also redeploy the Bicep template if `infra/` changed.
+
+**Uninstalling.** This permanently deletes every resource the template created, so check the name first:
+
+```bash
+az group delete --name "rg-$ENV_NAME"
+```
+
+Azure keeps a deleted Key Vault recoverable for a retention period, so reinstalling under the same
+`ENV_NAME` and region may conflict with it. Use a different `ENV_NAME` if it does. Also remove your app
+from the FordConnect or Smartcar developer portal.
+
+### Experimenting with simulated fuel
+
+Locally, edit `FakeFuel__PercentRemaining` (and optionally `FakeFuel__RangeMiles`) in
+`local.settings.json`, then restart `func start`. To re-arm the alert between experiments, delete the
+saved state file. Unless `AlertState__FilePath` says otherwise, it's `ford-fuel-alert/alert-state.json`
+under your local app-data folder: `~/Library/Application Support` on macOS, `~/.local/share` on Linux,
+or `%LOCALAPPDATA%` on Windows.
+
+| Set `FakeFuel__PercentRemaining` | Prior state        | Expected behavior                         |
+| -------------------------------- | ------------------ | ----------------------------------------- |
+| `50`                             | no alert sent      | No alert (above threshold)                |
+| `20`                             | no alert sent      | **Sends** alert, saves `AlertSent=true`   |
+| `20`                             | alert already sent | No email (duplicate suppressed)           |
+| `45`                             | alert already sent | Resets alert state (>= reset %)           |
+| *(empty / unset)*                | any                | Treated as "data unavailable" — no email  |
+
+---
+
+# Reference
 
 ## Architecture
 
@@ -59,73 +348,10 @@ src/FordFuelAlert.Functions/
 tests/FordFuelAlert.Tests/    xUnit tests for the alert logic, the providers and the factories
 ```
 
----
-
-## Why a fake fuel service first?
-
-Integrating a real vehicle-data provider (Smartcar / official Ford APIs) requires OAuth onboarding,
-vehicle-owner authorization, and live credentials. By starting with a fake provider we can build and
-*prove* the parts that are entirely ours — scheduling, the alert/reset state machine, email
-formatting, persistence, and tests — without waiting on any of that. The real FordConnect Query and
-Smartcar providers have since been implemented behind that same `IFuelService` interface — with no
-changes to the alert logic — and are selected with `Fuel__Provider=fordconnect` or
-`Fuel__Provider=smartcar` (dispatched by `FuelServiceFactory`).
-
----
-
-## Running locally
-
-### Prerequisites
-
-- **.NET SDK** — this repo targets `net10.0` (isolated worker).
-- **Azure Functions Core Tools v4** — `npm install -g azure-functions-core-tools@4`
-- **Azurite** (storage emulator; timer triggers need a storage backend) — `npm install -g azurite`
-
-### Steps
-
-```bash
-# 1. Create your local settings from the template (this file is gitignored)
-cp src/FordFuelAlert.Functions/local.settings.sample.json src/FordFuelAlert.Functions/local.settings.json
-
-# 2. Start the storage emulator (in its own terminal)
-azurite --silent --location ./.azurite
-
-# 3. Build + run the function host (from the function project folder)
-cd src/FordFuelAlert.Functions
-func start
-```
-
-The timer fires every 2 hours (the `FuelAlertSchedule` value in the sample settings). To trigger it immediately without waiting, call the admin endpoint:
-
-```bash
-curl -X POST http://localhost:7071/admin/functions/CheckFuelLevelFunction \
-  -H "Content-Type: application/json" -d '{"input":""}'
-```
-
-With the sample settings (fake fuel at 20%, threshold 25%) you'll see the alert fire and the fake
-email logged to the console. Trigger it again and it won't re-send (dedup), because state was saved.
-
-### Tests
-
-```bash
-dotnet test
-```
-
----
-
-## Changing the fake fuel values for testing
-
-Edit `FakeFuel__PercentRemaining` (and optionally `FakeFuel__RangeMiles`) in `local.settings.json`,
-then restart `func start`. To re-arm the alert between experiments, delete the saved state file
-(see `AlertState__FilePath`, defaults under your local app-data folder).
-
-| Set `FakeFuel__PercentRemaining` | Prior state        | Expected behavior                         |
-| -------------------------------- | ------------------ | ----------------------------------------- |
-| `50`                             | no alert sent      | No alert (above threshold)                |
-| `20`                             | no alert sent      | **Sends** alert, saves `AlertSent=true`   |
-| `20`                             | alert already sent | No email (duplicate suppressed)           |
-| `45`                             | alert already sent | Resets alert state (>= reset %)           |
-| *(empty / unset)*                | any                | Treated as "data unavailable" — no email  |
+The fake provider stays the default (`Fuel__Provider=fake`), so the scheduling, alert logic, email
+formatting, persistence and tests all run without vehicle credentials. The real providers sit behind
+the same `IFuelService` interface and needed no changes to the alert logic. All decision logic lives
+in `FuelAlertService`, which has no Azure Functions dependencies; the Function itself is a thin trigger.
 
 ---
 
@@ -300,7 +526,8 @@ expiry date shown in the portal.
 
 **6. Configure the app.** Locally, put the values in `local.settings.json` (gitignored) and set
 `Fuel__Provider=fordconnect`. For Azure the two secrets must never be committed — they reach Key
-Vault through environment variables consumed by `infra/main.parameters.json`:
+Vault. With plain `az`, pass them as shown in [Step 5](#step-5-switch-to-live-data). With `azd`, set them
+as environment variables consumed by `infra/main.parameters.json`:
 
 ```bash
 azd env set FORDCONNECT_CLIENT_ID <client id>
@@ -364,7 +591,8 @@ a fix.
 Keep the full error body too: the `Correlation ID` in `error_description` is what Ford developer
 support needs.
 
-## Smartcar / Ford authorization
+
+## Smartcar
 
 `SmartcarFuelService` reads the real vehicle's fuel level via the
 [Smartcar Vehicle API v3](https://smartcar.com/docs/api-reference/vehicles-api-intro) and is selected
@@ -461,71 +689,33 @@ app-settings set, so a setting added by hand in the portal is removed on the nex
 > On **Flex Consumption**, the worker runtime is set through `functionAppConfig.runtime`
 > (`dotnet-isolated`), which replaces the classic `FUNCTIONS_WORKER_RUNTIME` app setting.
 
-### Deploy
+### Deploying with azd
 
-With `azd` (recommended):
+`azure.yaml` and `infra/main.parameters.json` also support [`azd`](https://learn.microsoft.com/azure/developer/azure-developer-cli/).
+The installation guide uses plain `az` because that's how the reference deployment is managed.
 
 ```bash
 azd env new ffa-dev
 azd env set FUEL_ALERT_RECIPIENT_EMAIL you@example.com
-azd env set FUEL_ALERT_VEHICLE_ID demo-vehicle
-azd env set SMARTCAR_CLIENT_ID <client-id>
-azd env set SMARTCAR_USER_ID <smartcar-user-id>
-azd env set SMARTCAR_VEHICLE_ID <smartcar-vehicle-id>   # optional
+azd env set FUEL_ALERT_VEHICLE_ID my-ford
 # azd env set FUEL_PROVIDER fordconnect     # optional cutover: live reads (or smartcar)
 azd provision --preview   # what-if
 azd up                    # provision + deploy code
 ```
 
-`FUEL_ALERT_VEHICLE_ID` is the app's own label for the vehicle (used as the alert-state row key),
-while `SMARTCAR_VEHICLE_ID` is Smartcar's id for it. `infra/main.parameters.json` also maps
-`SMARTCAR_CLIENT_SECRET`, `FAKE_FUEL_PERCENT_REMAINING`, and `FAKE_FUEL_RANGE_MILES` to the
-`smartcarClientSecret`, `fakeFuelPercentRemaining`, and `fakeFuelRangeMiles` parameters; leave any
-of them unset to omit the matching setting. `FUEL_PROVIDER` maps to `fuelProvider`
-and defaults to `true` when unset. azd remembers every `azd env set` value per environment, so after
-`azd env set FUEL_PROVIDER fordconnect` later `azd provision` / `azd up` runs keep the live
-provider.
+`FUEL_ALERT_VEHICLE_ID` is the app's own label for the vehicle (used as the alert-state row key).
+`infra/main.parameters.json` also maps `SMARTCAR_CLIENT_ID`, `SMARTCAR_CLIENT_SECRET`,
+`SMARTCAR_USER_ID`, `SMARTCAR_VEHICLE_ID`, `FAKE_FUEL_PERCENT_REMAINING`, and `FAKE_FUEL_RANGE_MILES`
+to the matching parameters; leave any of them unset to omit the matching setting. `FUEL_PROVIDER` maps
+to `fuelProvider` and defaults to `fake` when unset. azd remembers every `azd env set` value per
+environment, so after `azd env set FUEL_PROVIDER fordconnect` later `azd provision` / `azd up` runs
+keep the live provider.
 
-Or with plain `az` (subscription-scoped):
-
-```bash
-az deployment sub create \
-  --location eastus2 \
-  --template-file infra/main.bicep \
-  --parameters environmentName=ffa-dev location=eastus2 \
-               recipientEmail=you@example.com vehicleId=demo-vehicle \
-  --what-if     # drop --what-if to actually deploy
-```
-
-Production configuration (issue #8), with the Smartcar settings in place but the fake provider
-still selected. The client secret comes from an environment variable, never a literal:
-
-```bash
-az deployment sub create \
-  --location eastus2 \
-  --template-file infra/main.bicep \
-  --parameters environmentName=ffa-prod location=eastus2 \
-               recipientEmail=you@example.com vehicleId=demo-vehicle \
-               smartcarClientId=<client-id> smartcarUserId=<smartcar-user-id> \
-               smartcarClientSecret="$SMARTCAR_CLIENT_SECRET" \
-               fuelProvider=fake \
-  --what-if     # drop --what-if to actually deploy
-```
-
-The cutover to live data is the same command with `fuelProvider=fordconnect` (plus the
-`fordConnect*` parameters) or `fuelProvider=smartcar` (plus the `smartcar*` parameters).
-
-> **Warning:** with plain `az`, `fuelProvider` is a command-line parameter and `az` has no
-> memory, so every redeploy must repeat `fuelProvider=fordconnect`, or the app moves back to the
-> fake provider. Redeploy against your **existing** environment: the same `environmentName` and
-> `location` you provisioned with (a different pair creates a separate resource group and app),
-> plus every parameter you had set, including `smartcarVehicleId` if you pinned one. An omitted
-> optional parameter falls back to its default and its app setting is removed. With `azd`, set
-> `FUEL_PROVIDER=fordconnect` once in the environment instead.
+The plain `az` equivalents are in the [installation guide](#step-2-create-the-azure-resources).
 
 ### Continuous deployment (GitHub Actions)
 
-Code deploys automatically: every push to `main` runs [CI](.github/workflows/ci.yml), and when it
+Once set up, code deploys automatically: every push to `main` runs [CI](.github/workflows/ci.yml), and when it
 succeeds, [Deploy](.github/workflows/deploy.yml) publishes the Functions project and deploys it to
 the Function App (it checks out the exact commit CI validated). It can also be run manually from the
 Actions tab (`workflow_dispatch`).
@@ -549,18 +739,18 @@ Plus one repository **variable**, which is already public as the app's hostname:
 | ------------------------- | -------------------------------------------- |
 | `AZURE_FUNCTION_APP_NAME` | Function App created by the Bicep deployment |
 
-One-time setup (already done for this repo — recorded here so it's reproducible):
+One-time setup, run from your fork with the [GitHub CLI](https://cli.github.com/) signed in:
 
 ```bash
 # App registration + service principal for GitHub Actions
 appId=$(az ad app create --display-name github-ford-fuel-alert-deploy --query appId -o tsv)
 az ad sp create --id "$appId"
 
-# Trust GitHub Actions tokens for the main branch of this repo
+# Trust GitHub Actions tokens for the main branch of your fork
 az ad app federated-credential create --id "$appId" --parameters '{
   "name": "github-main-branch",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:MattFromRVA/ford-fuel-alert:ref:refs/heads/main",
+  "subject": "repo:<your-github-user>/ford-fuel-alert:ref:refs/heads/main",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
@@ -576,7 +766,7 @@ gh variable set AZURE_FUNCTION_APP_NAME --body "<function-app-name>"
 ```
 
 Because the deployment identity is scoped to the Function App, it cannot create or change other
-resources. Run `azd provision` / `azd up` locally with an account that has rights on the resource
+resources. Run infrastructure deployments locally with an account that has rights on the resource
 group; the workflow only publishes code.
 
 ### Notes
@@ -593,7 +783,7 @@ group; the workflow only publishes code.
 
 ---
 
-## Deploying to Azure
+## Deploying to Azure by hand
 
 > Prefer the Bicep templates in [`infra/`](infra/) — see [Infrastructure (Bicep / azd)](#infrastructure-bicep--azd). The steps below are the manual equivalent.
 
@@ -634,4 +824,3 @@ group; the workflow only publishes code.
 
 Provided as-is, with no warranty. This is a personal utility rather than a supported product; if you
 deploy your own copy, review the [security notes](#security-notes) and scope your Azure deployment
-identity to your own repository.

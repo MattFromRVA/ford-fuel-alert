@@ -18,6 +18,7 @@ local.settings.json
 .azure/
 
 ## Azurite storage emulator artifacts
+.azurite/
 __azurite_db*.json
 __blobstorage__/
 __queuestorage__/
